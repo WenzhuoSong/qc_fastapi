@@ -1,7 +1,5 @@
 # CrewAI + FastAPI Project Framework
 
-[![Tests](https://github.com/WenzhuoSong/qc_fastapi/actions/workflows/tests.yml/badge.svg)](https://github.com/WenzhuoSong/qc_fastapi/actions)
-
 An intelligent agent API service framework based on CrewAI and FastAPI, supporting the creation and management of AI agent teams to execute complex tasks.
 
 ## Project Structure
