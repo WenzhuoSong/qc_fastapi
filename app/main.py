@@ -14,12 +14,8 @@ from app.api.v1.router import api_router
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     # Execute on startup
-    import os
     print(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
-    raw_token = os.environ.get("API_TOKEN", "")
-    print(f"API_TOKEN from os.environ: '{raw_token[:5]}...' (length={len(raw_token)})")
-    print(f"API_TOKEN from settings:   (length={len(settings.API_TOKEN)})")
-    print(f"All env keys with 'TOKEN': {[k for k in os.environ if 'TOKEN' in k.upper()]}")
+    print(f"API auth enabled: {bool(settings.API_TOKEN)}")
     yield
     # Execute on shutdown
     print("Application shutting down")
