@@ -15,9 +15,15 @@ qc_fastapi/
 │   │       │   └── tasks.py         # Task management
 │   │       └── router.py            # Route aggregation
 │   ├── core/
+│   │   ├── security.py              # Bearer Token authentication
+│   │   ├── cache.py                 # TTL cache for crew results
 │   │   └── tools.py                 # Custom tools
+│   ├── models/
+│   │   └── schemas.py               # Centralized Pydantic schemas
 │   ├── services/
-│   │   └── crew_service.py          # CrewAI service layer
+│   │   ├── crew_service.py          # CrewAI orchestration
+│   │   ├── agents.py                # Agent definitions
+│   │   └── tasks_def.py             # Task definitions
 │   ├── config.py                    # Application configuration
 │   └── main.py                      # FastAPI main application
 ├── tests/                           # Test files
@@ -59,8 +65,9 @@ pip install -r requirements.txt
 # Copy environment template
 cp env_example.txt .env
 
-# Edit .env file and set your OpenAI API Key
+# Edit .env file and set your keys
 OPENAI_API_KEY=your_api_key_here
+API_TOKEN=your_secret_api_token_here   # leave empty to disable auth in dev
 ```
 
 ### 3. Start the Service
@@ -159,6 +166,21 @@ python example_usage.py execute
 python example_usage.py tasks
 ```
 
+## Authentication
+
+All endpoints (except `/health`) require a Bearer token when `API_TOKEN` is set:
+
+```bash
+curl -H "Authorization: Bearer your_secret_api_token_here" \
+     http://localhost:8000/api/v1/crew/info
+```
+
+When `API_TOKEN` is empty (local development), authentication is skipped.
+
+## Caching
+
+Crew execution results are cached in memory with a **5-minute TTL** (configurable in `app/core/cache.py`). Identical requests within the TTL window return cached results instantly without calling the LLM again. The response includes `"from_cache": true` when served from cache.
+
 ## Default Agent Team
 
 The project includes a pre-configured content creation team with three agents:
@@ -254,6 +276,7 @@ railway up
 | 变量名 | 说明 | 必需 |
 |--------|------|------|
 | `OPENAI_API_KEY` | OpenAI API 密钥 | ✅ 是 |
+| `API_TOKEN` | API 鉴权令牌（留空则跳过鉴权） | ✅ 生产环境必需 |
 | `APP_NAME` | 应用名称 | ❌ 否（默认：CrewAI FastAPI Service） |
 | `DEBUG` | 调试模式 | ❌ 否（默认：false） |
 

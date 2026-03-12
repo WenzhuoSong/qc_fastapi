@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
+    # API authentication (leave empty to disable auth in local dev)
+    API_TOKEN: str = ""
+    
     # OpenAI configuration
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"

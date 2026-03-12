@@ -2,42 +2,24 @@
 Task Management API Endpoints
 """
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Depends
+from typing import List
 from datetime import datetime
+
+from app.models.schemas import TaskCreateRequest, TaskResponse
+from app.core.security import verify_token
 
 router = APIRouter()
 
 # In-memory task storage (use database in production)
-tasks_db = {}
-
-
-class TaskCreateRequest(BaseModel):
-    """Create task request"""
-    name: str
-    description: str
-    agent_role: str
-    expected_output: Optional[str] = None
-    context: Optional[Dict[str, Any]] = None
-
-
-class TaskResponse(BaseModel):
-    """Task response"""
-    id: str
-    name: str
-    description: str
-    status: str
-    created_at: str
-    completed_at: Optional[str] = None
-    result: Optional[str] = None
+tasks_db: dict = {}
 
 
 @router.post("/", response_model=TaskResponse)
-async def create_task(request: TaskCreateRequest):
+async def create_task(request: TaskCreateRequest, _token: str = Depends(verify_token)):
     """Create new task"""
     task_id = f"task_{len(tasks_db) + 1}"
-    
+
     task = {
         "id": task_id,
         "name": request.name,
@@ -50,9 +32,9 @@ async def create_task(request: TaskCreateRequest):
         "completed_at": None,
         "result": None,
     }
-    
+
     tasks_db[task_id] = task
-    
+
     return TaskResponse(
         id=task_id,
         name=task["name"],
@@ -63,7 +45,7 @@ async def create_task(request: TaskCreateRequest):
 
 
 @router.get("/", response_model=List[TaskResponse])
-async def list_tasks():
+async def list_tasks(_token: str = Depends(verify_token)):
     """List all tasks"""
     return [
         TaskResponse(
@@ -80,11 +62,11 @@ async def list_tasks():
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: str):
+async def get_task(task_id: str, _token: str = Depends(verify_token)):
     """Get task details"""
     if task_id not in tasks_db:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     task = tasks_db[task_id]
     return TaskResponse(
         id=task["id"],
@@ -98,10 +80,10 @@ async def get_task(task_id: str):
 
 
 @router.delete("/{task_id}")
-async def delete_task(task_id: str):
+async def delete_task(task_id: str, _token: str = Depends(verify_token)):
     """Delete task"""
     if task_id not in tasks_db:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     del tasks_db[task_id]
     return {"message": "Task deleted"}

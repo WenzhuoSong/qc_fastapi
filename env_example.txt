@@ -18,3 +18,6 @@ DEBUG=true
 # Server Settings
 HOST=0.0.0.0
 PORT=8000
+
+# API Authentication (leave empty to disable in local dev)
+API_TOKEN=your_secret_api_token_here
