@@ -15,6 +15,7 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     # Execute on startup
     print(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    print(f"API_TOKEN configured: {bool(settings.API_TOKEN)} (length={len(settings.API_TOKEN)})")
     yield
     # Execute on shutdown
     print("Application shutting down")
