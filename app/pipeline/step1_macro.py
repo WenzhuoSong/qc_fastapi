@@ -77,6 +77,14 @@ def parse_macro_output(raw_text: str) -> Dict[str, Any]:
                         for key in MACRO_DEFAULTS:
                             if key != "raw_text" and key in parsed:
                                 result[key] = parsed[key]
+                        summary = str(result.get("summary", "")).strip()
+                        if not summary:
+                            events = result.get("key_events", [])
+                            events_str = ", ".join(str(e) for e in events) if events else "N/A"
+                            result["summary"] = (
+                                f"Regime: {result.get('regime')}. "
+                                f"Key events: {events_str}"
+                            )
                         return result
                 except json.JSONDecodeError:
                     pass

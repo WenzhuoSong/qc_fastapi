@@ -42,9 +42,6 @@ from app.pipeline.step3_risk import run_risk_audit
 from app.pipeline.step4_format import normalize_to_weights
 
 PIPELINE_TIMEOUT = 1800  # 30 minutes
-DEFENSIVE_TICKERS = {"XLP", "XLU", "XLV"}
-
-
 def _build_history_block(db: Session, limit: int = 5) -> str:
     """Load recent DailyNewsDigest rows and format into a history block."""
     rows = (
@@ -64,14 +61,22 @@ def _build_history_block(db: Session, limit: int = 5) -> str:
     return "\n".join(lines)
 
 
-def _compute_defense_level(weights: Dict[str, float]) -> str:
-    """Derive defense level from final weights."""
-    defense_pct = sum(weights.get(t, 0) for t in DEFENSIVE_TICKERS)
-    if defense_pct >= 0.30:
-        return "full"
-    elif defense_pct >= 0.20:
+def _compute_defense_level(qc_regime: str | None, ai_regime: str) -> str:
+    """Derive defense level from QC vs AI regime comparison.
+
+    Rules:
+      - QC=bear OR AI=Risk-Off → half  (strong caution)
+      - AI=Neutral             → light (mild caution)
+      - Otherwise              → full  (both bullish / risk-on)
+    """
+    ai = ai_regime.lower().replace("-", "").replace(" ", "")
+    qc = (qc_regime or "").lower().strip()
+
+    if qc == "bear" or ai == "riskoff":
         return "half"
-    return "light"
+    if ai == "neutral":
+        return "light"
+    return "full"
 
 
 def _build_ticker_risks(
@@ -241,7 +246,7 @@ async def run_pipeline(target_date: date) -> None:
             log.ai_regime = ai_regime
             log.regime_override = regime_override
             log.confidence = macro_parsed.get("confidence", 50)
-            log.defense_level = _compute_defense_level(weights)
+            log.defense_level = _compute_defense_level(qc_regime, ai_regime)
             log.final_weights = weights
             log.reasoning = macro_parsed.get("reasoning", "")
             db.commit()

@@ -66,6 +66,8 @@ def fetch_economic_calendar(days_ahead: int = 3) -> List[dict]:
         )
         events = resp.json().get("economicCalendar", [])
         high = [e for e in events if e.get("impact") == "high"]
+        if not high:
+            high = events[:5]
         return high[:10]
     except Exception as e:
         print(f"[DataFetcher] econ calendar error: {e}")

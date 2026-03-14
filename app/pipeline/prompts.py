@@ -69,7 +69,9 @@ MICRO_USER = (
 
 RISK_SYSTEM = (
     "You are the Chief Risk Officer. Review the proposed allocation "
-    "and flag any concentration or tail-risk issues."
+    "and flag any concentration or tail-risk issues. "
+    "Output ONLY a JSON object. No markdown, no headers, no explanation "
+    "before the JSON. All reasoning goes INSIDE the JSON fields."
 )
 
 RISK_USER = (
@@ -80,9 +82,12 @@ RISK_USER = (
     "1. Max single-sector exposure should not exceed 40%\n"
     "2. Defensive allocation floor of 10% in risk-off regimes\n"
     "3. Any red-flag warnings\n\n"
-    "If adjustments are needed, return the adjusted scores as a JSON object "
-    "with the SAME format:\n"
-    '{{"XLK": 7, "XLF": 6, "XLV": 5, ...}}\n\n'
-    "If no adjustments are needed, state that clearly without a JSON block. "
-    "Follow with a brief risk commentary."
+    "Return ONLY this JSON (no markdown fences, replace <...> with your values):\n"
+    '{{"needs_adjustment": <true or false>,'
+    ' "adjusted_scores": {{"XLK": <score>, "XLF": <score>, "XLV": <score>, '
+    '"XLE": <score>, "XLI": <score>, "XLP": <score>, "XLU": <score>, '
+    '"XLY": <score>, "XLC": <score>, "XLRE": <score>, "XLB": <score>}},'
+    ' "reasoning": "<brief risk commentary>"}}\n\n'
+    "If no adjustment is needed, set needs_adjustment to false and "
+    "keep adjusted_scores identical to the proposed scores."
 )
