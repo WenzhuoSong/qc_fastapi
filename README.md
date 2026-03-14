@@ -1,56 +1,83 @@
 # Quant Agent Backend (V3.1 Chronos)
 
-A quantitative trading backend that **pre-computes portfolio allocations** using LLM-powered research and serves them via a lightweight API gateway to QuantConnect.
+A quantitative trading backend that **pre-computes portfolio allocations** using LLM-powered research grounded in real market data, and serves them via a lightweight API gateway to QuantConnect.
 
-**Core Philosophy**: Computation and delivery are fully separated. Heavy LLM inference runs on a schedule (Cron), while the API only queries the database — guaranteeing <10ms response times and zero timeout risk.
+**Core Philosophy**: AI does subtraction, not addition — high-confidence event filtering and risk-off detection, not price prediction. Computation and delivery are fully separated.
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Cron Pipeline   │────▶│   PostgreSQL     │◀────│  FastAPI Gateway │
-│  (14:00 ET daily)│     │   (SSOT)         │     │  (24/7)          │
-│                  │     │                  │     │                  │
-│  Step 1: Macro   │     │  daily_decisions │     │  GET /allocation │
-│  Step 2: Micro   │     │  - status        │     │  - is_stale flag │
-│  Step 3: Risk    │     │  - checkpoints   │     │  - Bearer auth   │
-│  Step 4: Format  │     │  - final_weights │     │                  │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                                                         ▲
-                                                         │
-                                                  QuantConnect
+ 10:00 ET                    14:00 ET                      15:45 ET
+    │                           │                              │
+    ▼                           ▼                              ▼
+┌────────┐    ┌─────────────────────────────────┐    ┌─────────────────┐
+│  QC    │───▶│         Cron Pipeline            │    │  FastAPI Gateway │
+│ POST   │    │                                  │    │  (24/7, <10ms)   │
+│holdings│    │  Finnhub ──┐                     │    │                  │
+└────────┘    │            ▼                     │    │ GET /allocation  │
+              │  Step 1: Macro Analysis          │    │  → weights       │
+              │    └─ news + calendar + history   │    │  → defense_level │
+              │  Step 2: Micro Scoring            │    │  → risk_flags    │
+              │    └─ holdings + news + earnings  │    │  → regime        │
+              │  Step 3: Risk Audit               │    │                  │
+              │  Step 4: Normalize Weights         │    │ GET /decisions   │
+              │                                   │    │  → audit trail   │
+              │  Hard Risk Scan                   │    │                  │
+              │  Gated Regime Override             │    │ PATCH /decisions │
+              └──────────┬────────────────────────┘    │  → backfill      │
+                         │                              └────────┬────────┘
+                         ▼                                       ▲
+              ┌──────────────────────┐                           │
+              │     PostgreSQL       │◀──────────────────────────┘
+              │                      │
+              │  daily_decisions     │  Checkpoint state machine
+              │  daily_holdings      │  QC position snapshot
+              │  daily_news_digest   │  Macro/micro summaries
+              │  decision_log        │  Audit trail + validation
+              └──────────────────────┘
 ```
+
+## Three-Layer Value Framework
+
+| Layer | Function | Confidence | Usage |
+|-------|----------|------------|-------|
+| **Hard Rules** | Earnings/FDA/halt/merger detection | High | Auto-exclude from new buys |
+| **Regime Override** | AI downgrades QC regime (gated) | Medium | Only Risk-Off, confidence>=80, >=2 events |
+| **ETF Scoring** | Sector allocation weights | Low | Reference only during observation period |
+
+**Key Principle**: AI can only downgrade positions (subtract risk), never upgrade them.
 
 ## Project Structure
 
 ```
 qc_fastapi/
-├── cron_pipeline.py              # Cron Job entry — checkpoint-based daily pipeline
+├── cron_pipeline.py              # Cron entry — checkpoint pipeline + regime override
 ├── app/
 │   ├── api/v1/
 │   │   ├── endpoints/
-│   │   │   ├── allocation.py     # GET /allocation (lightweight DB query)
-│   │   │   ├── crew.py           # CrewAI endpoints (legacy)
+│   │   │   ├── allocation.py     # GET  — weights + defense_level + risk_flags
+│   │   │   ├── holdings.py       # POST — QC 10:00 ET position snapshot
+│   │   │   ├── decisions.py      # GET/PATCH — decision log review + backfill
 │   │   │   ├── health.py         # Health checks
+│   │   │   ├── crew.py           # CrewAI (legacy)
 │   │   │   └── tasks.py          # Task management (legacy)
 │   │   └── router.py
 │   ├── core/
 │   │   ├── security.py           # Bearer Token authentication
 │   │   ├── cache.py              # TTL cache
-│   │   ├── notifier.py           # Telegram alerts
-│   │   └── tools.py              # Custom tools (legacy)
+│   │   └── notifier.py           # Telegram alerts
 │   ├── db/
-│   │   ├── database.py           # SQLAlchemy connection pool
-│   │   └── models.py             # daily_decisions ORM (checkpoint state machine)
+│   │   ├── database.py           # SQLAlchemy lazy-init connection pool
+│   │   └── models.py             # 4 tables: decisions, holdings, digest, log
 │   ├── models/
-│   │   └── schemas.py            # Pydantic schemas (AllocationResponse, etc.)
+│   │   └── schemas.py            # Pydantic schemas
 │   ├── pipeline/
-│   │   ├── prompts.py            # All LLM prompts in one place
-│   │   ├── step1_macro.py        # Macro regime analysis
-│   │   ├── step2_micro.py        # Sector ETF scoring
+│   │   ├── data_fetcher.py       # Finnhub API: news, calendar, earnings, hard risks
+│   │   ├── prompts.py            # All LLM prompts (structured JSON output)
+│   │   ├── step1_macro.py        # Macro regime → structured {regime, confidence, ...}
+│   │   ├── step2_micro.py        # Sector ETF scoring with news + earnings context
 │   │   ├── step3_risk.py         # Risk audit & guardrails
-│   │   └── step4_format.py       # Normalize to portfolio weights
-│   ├── services/                 # CrewAI services (legacy)
+│   │   └── step4_format.py       # Normalize scores → portfolio weights
 │   ├── config.py                 # Pydantic settings
 │   └── main.py                   # FastAPI app entry
 ├── tests/
@@ -73,7 +100,7 @@ pip install -r requirements.txt
 
 ```bash
 cp env_example.txt .env
-# Edit .env: set OPENAI_API_KEY, API_TOKEN, DATABASE_URL
+# Edit .env: set OPENAI_API_KEY, API_TOKEN, DATABASE_URL, FINNHUB_API_KEY
 ```
 
 ### 3. Start the API Gateway
@@ -83,14 +110,11 @@ python run.py
 # API docs: http://localhost:8000/docs
 ```
 
-### 4. Run the Cron Pipeline (locally)
+### 4. Run the Cron Pipeline
 
 ```bash
-# Run for today
-python cron_pipeline.py
-
-# Run for a specific date
-python cron_pipeline.py 2026-03-14
+python cron_pipeline.py              # run for today
+python cron_pipeline.py 2026-03-14   # run for a specific date
 ```
 
 ## API Endpoints
@@ -106,11 +130,14 @@ python cron_pipeline.py 2026-03-14
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/allocation/` | **Get portfolio weights** (core endpoint for QC) |
-| POST | `/api/v1/crew/execute` | Execute CrewAI task (legacy) |
-| GET | `/api/v1/crew/info` | Crew configuration info |
+| GET | `/api/v1/allocation/` | Portfolio weights + defense_level + risk_flags |
+| POST | `/api/v1/holdings/` | Submit QC 10:00 ET holdings snapshot |
+| GET | `/api/v1/holdings/` | View today's holdings |
+| GET | `/api/v1/decisions/` | List recent decision logs |
+| GET | `/api/v1/decisions/{date}` | Single day decision detail |
+| PATCH | `/api/v1/decisions/{date}` | Backfill market_outcome + correctness |
 
-### Allocation Response Format
+### Allocation Response
 
 ```json
 {
@@ -118,41 +145,87 @@ python cron_pipeline.py 2026-03-14
     "status": "READY",
     "is_stale": false,
     "weights": {
-        "XLK": 0.35,
-        "XLF": 0.25,
-        "XLV": 0.15,
-        "XLE": 0.10,
-        "XLI": 0.08,
-        "XLP": 0.04,
-        "XLU": 0.03
+        "XLK": 0.14, "XLF": 0.12, "XLV": 0.10,
+        "XLE": 0.08, "XLI": 0.10, "XLP": 0.06,
+        "XLU": 0.04, "XLY": 0.12, "XLC": 0.10,
+        "XLRE": 0.06, "XLB": 0.08
     },
+    "defense_level": "light",
+    "risk_flags": {"NVDA": ["earnings_soon"]},
+    "regime": "Neutral",
     "message": null
 }
 ```
 
-**`is_stale` graceful degradation**:
-- `false` — Today's allocation is fresh and READY
-- `true` — Fell back to the most recent valid allocation (non-trading day, pipeline error, etc.)
+**Fields for QC consumption**:
+- `weights` — ETF allocation targets (sum = 1.0)
+- `defense_level` — Position sizing: `full` / `light` / `half`
+- `risk_flags` — Per-ticker hard events: `earnings_soon`, `fda_pending`, `trading_halted`, `acquisition_target`, `major_lawsuit`
+- `regime` — AI macro regime call: `Risk-On` / `Neutral` / `Risk-Off`
+- `is_stale` — `true` = using fallback data from a previous day
+
+## Pipeline Data Flow
+
+```
+Finnhub API
+  ├── fetch_macro_news()         ─┐
+  ├── fetch_economic_calendar()   ├──▶ Step 1: Macro Analysis → structured JSON
+  └── 5-day history_block        ─┘      ↓ writes DailyNewsDigest
+                                         ↓
+  ├── fetch_all_holdings_news()  ─┐
+  ├── fetch_earnings_flag()       ├──▶ Step 2: Micro Scoring → ETF scores
+  └── scan_all_holdings_risks()  ─┘      ↓ updates ticker_risks
+                                         ↓
+                                    Step 3: Risk Audit → adjusted scores
+                                         ↓
+                                    Step 4: Normalize → weights (sum=1.0)
+                                         ↓
+                                    Gated Regime Override
+                                      ├── confidence >= 80?
+                                      ├── >= 2 key events?
+                                      ├── AI says Risk-Off?
+                                      └── YES to all → override QC regime
+                                         ↓
+                                    Write DecisionLog (audit trail)
+```
+
+## Gated Regime Override
+
+AI can only **downgrade** positions, never upgrade. Override requires ALL conditions:
+
+1. AI confidence >= 80
+2. AI regime differs from QC regime
+3. At least 2 key events as evidence
+4. AI regime is `Risk-Off` (downgrade only)
+
+If any condition fails → keep QC's regime, log the rejection reason.
 
 ## Checkpoint State Machine
 
-The pipeline uses a database-backed state machine for fault tolerance:
-
 ```
 INIT → STEP1_DONE → STEP2_DONE → STEP3_DONE → READY
-  ↓                                               
+  ↓
 ERROR (resume from last checkpoint on retry)
 ```
 
-If the pipeline crashes at Step 2, rerunning it will skip Step 1 (already saved) and resume from Step 2. No duplicate LLM calls, no wasted money.
+Crash at Step 2? Rerun skips Step 1 (already saved) and resumes from Step 2. No duplicate LLM calls.
+
+## Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `daily_decisions` | Pipeline checkpoint state machine + final weights |
+| `daily_holdings` | QC 10:00 ET position snapshot (tickers + payload) |
+| `daily_news_digest` | Macro summary, regime, key events, ticker risks |
+| `decision_log` | Full audit: QC vs AI regime, override, defense, backfill fields |
 
 ## Railway Deployment
 
 ### Services Required
 
-1. **PostgreSQL** — Add via Railway Dashboard → New → Database → PostgreSQL
-2. **Web Service** — Your FastAPI gateway (this repo, auto-deploys from GitHub)
-3. **Cron Job** — Runs `python cron_pipeline.py` daily at `0 18 * * 1-5` (14:00 ET = 18:00 UTC, weekdays only)
+1. **PostgreSQL** — Add via Railway Dashboard
+2. **Web Service** — FastAPI gateway (auto-deploys from GitHub)
+3. **Cron Job** — `python cron_pipeline.py` at `0 18 * * 1-5` (14:00 ET, weekdays)
 
 ### Environment Variables
 
@@ -160,17 +233,35 @@ If the pipeline crashes at Step 2, rerunning it will skip Step 1 (already saved)
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
 | `API_TOKEN` | Yes (prod) | Bearer token for API auth |
-| `DATABASE_URL` | Yes | PostgreSQL connection string (auto-provided by Railway) |
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `FINNHUB_API_KEY` | Yes | Finnhub market data API key |
 | `TG_BOT_TOKEN` | No | Telegram bot token for alerts |
 | `TG_CHAT_ID` | No | Telegram chat ID for alerts |
 
+## Validation Workflow (Post-30 Days)
+
+```sql
+-- AI accuracy when calling Risk-Off
+SELECT date, ai_regime, confidence, market_outcome, decision_correct
+FROM decision_log
+WHERE ai_regime = 'Risk-Off'
+ORDER BY date DESC;
+
+-- Override frequency and accuracy
+SELECT date, qc_regime, ai_regime, regime_override, decision_correct
+FROM decision_log
+WHERE regime_override = true
+ORDER BY date DESC;
+```
+
 ## Tech Stack
 
-- **FastAPI** — Lightweight API gateway
-- **PostgreSQL** — Persistent checkpoint storage (SSOT)
-- **SQLAlchemy** — ORM and connection management
-- **OpenAI** — LLM-powered research pipeline
-- **Pydantic** — Data validation and settings
+- **FastAPI** — API gateway (<10ms response)
+- **PostgreSQL** — Persistent state (4 tables)
+- **SQLAlchemy** — ORM with lazy initialization
+- **OpenAI** — LLM pipeline (gpt-4o-mini)
+- **Finnhub** — Real-time news, economic calendar, earnings
+- **Pydantic** — Validation and settings management
 - **Uvicorn** — ASGI server
 
 ## License
