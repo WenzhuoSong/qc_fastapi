@@ -57,6 +57,7 @@ async def run_pipeline(target_date: date) -> None:
             row.error_log = None
             db.commit()
             print(f"[{target_date}] Step 1 done.")
+            print(f"[{target_date}]   Macro output (first 300 chars): {result[:300]}")
 
         # ── Step 2: Micro Scoring (with holdings + news) ──
         if row.status == "STEP1_DONE":
@@ -82,6 +83,7 @@ async def run_pipeline(target_date: date) -> None:
             row.status = "STEP2_DONE"
             db.commit()
             print(f"[{target_date}] Step 2 done.")
+            print(f"[{target_date}]   Micro output (first 500 chars): {result[:500]}")
 
         # ── Step 3: Risk Audit ──
         if row.status == "STEP2_DONE":
@@ -93,6 +95,7 @@ async def run_pipeline(target_date: date) -> None:
             row.status = "STEP3_DONE"
             db.commit()
             print(f"[{target_date}] Step 3 done.")
+            print(f"[{target_date}]   Risk output (first 500 chars): {result[:500]}")
 
         # ── Step 4: Format Weights (pure Python, no LLM) ──
         if row.status == "STEP3_DONE":
@@ -101,7 +104,9 @@ async def run_pipeline(target_date: date) -> None:
             row.final_weights = weights
             row.status = "READY"
             db.commit()
-            print(f"[{target_date}] Pipeline complete! Weights: {weights}")
+            print(f"[{target_date}] Pipeline complete!")
+            print(f"[{target_date}]   Tickers: {len(weights)}  Weights: {weights}")
+            print(f"[{target_date}]   Sum: {sum(weights.values()):.4f}")
 
     except Exception as e:
         error_msg = traceback.format_exc()

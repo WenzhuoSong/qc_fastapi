@@ -40,7 +40,11 @@ MICRO_USER = (
     "- Higher score = stronger conviction to overweight\n"
     "- Incorporate news sentiment: positive catalysts raise scores, negative ones lower them\n"
     "- Factor in current holdings: avoid excessive turnover unless news warrants it\n\n"
-    "Return a JSON object mapping ticker to raw score, followed by a brief rationale."
+    "You MUST return EXACTLY this JSON format as the FIRST thing in your response "
+    "(no markdown fences, no preamble):\n"
+    '{"XLK": 7, "XLF": 6, "XLV": 5, "XLE": 4, "XLI": 5, '
+    '"XLP": 3, "XLU": 2, "XLY": 6, "XLC": 5, "XLRE": 3, "XLB": 4}\n\n'
+    "Then provide a brief rationale below the JSON."
 )
 
 # ── Step 3: Risk Audit ───────────────────────────────────────────────
@@ -58,5 +62,9 @@ RISK_USER = (
     "1. Max single-sector exposure should not exceed 40%\n"
     "2. Defensive allocation floor of 10% in risk-off regimes\n"
     "3. Any red-flag warnings\n\n"
-    "Return adjusted scores if needed, plus a brief risk commentary."
+    "If adjustments are needed, return the adjusted scores as a JSON object "
+    "with the SAME format:\n"
+    '{"XLK": 7, "XLF": 6, "XLV": 5, ...}\n\n'
+    "If no adjustments are needed, state that clearly without a JSON block. "
+    "Follow with a brief risk commentary."
 )
