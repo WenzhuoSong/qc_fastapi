@@ -42,8 +42,8 @@ MICRO_USER = (
     "- Factor in current holdings: avoid excessive turnover unless news warrants it\n\n"
     "You MUST return EXACTLY this JSON format as the FIRST thing in your response "
     "(no markdown fences, no preamble):\n"
-    '{"XLK": 7, "XLF": 6, "XLV": 5, "XLE": 4, "XLI": 5, '
-    '"XLP": 3, "XLU": 2, "XLY": 6, "XLC": 5, "XLRE": 3, "XLB": 4}\n\n'
+    '{{"XLK": 7, "XLF": 6, "XLV": 5, "XLE": 4, "XLI": 5, '
+    '"XLP": 3, "XLU": 2, "XLY": 6, "XLC": 5, "XLRE": 3, "XLB": 4}}\n\n'
     "Then provide a brief rationale below the JSON."
 )
 
@@ -64,7 +64,7 @@ RISK_USER = (
     "3. Any red-flag warnings\n\n"
     "If adjustments are needed, return the adjusted scores as a JSON object "
     "with the SAME format:\n"
-    '{"XLK": 7, "XLF": 6, "XLV": 5, ...}\n\n'
+    '{{"XLK": 7, "XLF": 6, "XLV": 5, ...}}\n\n'
     "If no adjustments are needed, state that clearly without a JSON block. "
     "Follow with a brief risk commentary."
 )
