@@ -59,7 +59,31 @@ class AllocationResponse(BaseModel):
     status: str
     is_stale: bool
     weights: Dict[str, float]
+    defense_level: str = "full"
+    risk_flags: Dict[str, List[str]] = {}
+    regime: Optional[str] = None
     message: Optional[str] = None
+
+
+# ── Decision Log (review + backfill) ─────────────────────────────────
+
+class DecisionLogResponse(BaseModel):
+    date: str
+    qc_regime: Optional[str] = None
+    ai_regime: Optional[str] = None
+    regime_override: Optional[bool] = None
+    confidence: Optional[int] = None
+    defense_level: Optional[str] = None
+    final_weights: Optional[Dict[str, float]] = None
+    reasoning: Optional[str] = None
+    market_outcome: Optional[str] = None
+    decision_correct: Optional[bool] = None
+
+
+class DecisionLogUpdate(BaseModel):
+    """For backfilling post-hoc analysis fields."""
+    market_outcome: Optional[str] = None
+    decision_correct: Optional[bool] = None
 
 
 # ── Holdings (QC 10:00 ET Snapshot) ──────────────────────────────────

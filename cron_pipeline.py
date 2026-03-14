@@ -18,7 +18,7 @@ import json
 import asyncio
 import traceback
 from datetime import date, datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,7 @@ from app.pipeline.data_fetcher import (
     fetch_economic_calendar,
     fetch_all_holdings_news,
     fetch_earnings_flag,
+    scan_all_holdings_risks,
 )
 from app.pipeline.step1_macro import (
     run_macro_analysis,
@@ -42,6 +43,12 @@ from app.pipeline.step3_risk import run_risk_audit
 from app.pipeline.step4_format import normalize_to_weights
 
 PIPELINE_TIMEOUT = 1800  # 30 minutes
+
+
+# ═══════════════════════════════════════════════════════════════
+# Helper functions
+# ═══════════════════════════════════════════════════════════════
+
 def _build_history_block(db: Session, limit: int = 5) -> str:
     """Load recent DailyNewsDigest rows and format into a history block."""
     rows = (
@@ -61,38 +68,96 @@ def _build_history_block(db: Session, limit: int = 5) -> str:
     return "\n".join(lines)
 
 
-def _compute_defense_level(qc_regime: str | None, ai_regime: str) -> str:
-    """Derive defense level from QC vs AI regime comparison.
+def _apply_regime_override(
+    qc_regime: str | None, macro_parsed: Dict[str, Any]
+) -> tuple[str, bool, str]:
+    """Gated regime override — AI can only DOWNGRADE, never upgrade.
 
-    Rules:
-      - QC=bear OR AI=Risk-Off → half  (strong caution)
-      - AI=Neutral             → light (mild caution)
-      - Otherwise              → full  (both bullish / risk-on)
+    Returns (effective_regime, was_overridden, override_reason).
+
+    Override requires ALL conditions:
+      1. AI confidence >= 80
+      2. AI regime differs from QC
+      3. AI has >= 2 key events as evidence
+      4. AI regime is Risk-Off (downgrade only)
     """
-    ai = ai_regime.lower().replace("-", "").replace(" ", "")
-    qc = (qc_regime or "").lower().strip()
+    ai_regime = macro_parsed.get("regime", "Neutral")
+    confidence = macro_parsed.get("confidence", 50)
+    key_events = macro_parsed.get("key_events", [])
 
-    if qc == "bear" or ai == "riskoff":
+    if qc_regime is None:
+        return ai_regime, False, "No QC regime provided"
+
+    if qc_regime.lower() == ai_regime.lower().replace("-", "").replace(" ", ""):
+        return ai_regime, False, "QC and AI agree"
+
+    conditions = [
+        confidence >= 80,
+        len(key_events) >= 2,
+        ai_regime.lower().replace("-", "").replace(" ", "") == "riskoff",
+    ]
+
+    if all(conditions):
+        reason = (
+            f"AI override: {qc_regime}→{ai_regime} "
+            f"(confidence={confidence}, events={key_events[:3]})"
+        )
+        return ai_regime, True, reason
+
+    reason = (
+        f"Override blocked: confidence={confidence}, "
+        f"events={len(key_events)}, ai_regime={ai_regime}. "
+        f"Keeping QC regime={qc_regime}"
+    )
+    return qc_regime, False, reason
+
+
+def _compute_defense_level(effective_regime: str) -> str:
+    """Map effective regime to defense level.
+
+    After gated override, the effective regime already reflects the
+    correct call. Simple mapping:
+      Risk-Off → half
+      Neutral  → light
+      else     → full
+    """
+    r = effective_regime.lower().replace("-", "").replace(" ", "")
+    if r == "riskoff":
         return "half"
-    if ai == "neutral":
+    if r == "neutral":
         return "light"
     return "full"
 
 
 def _build_ticker_risks(
-    tickers: list, earnings_flags: Dict[str, bool], news: Dict[str, list]
+    tickers: List[str],
+    hard_risks: Dict[str, Dict[str, str]],
+    earnings_flags: Dict[str, bool],
+    news: Dict[str, list],
 ) -> Dict[str, dict]:
-    """Derive per-ticker risk assessments from available data."""
+    """Combine hard risk scan with earnings/news data for DailyNewsDigest."""
     risks = {}
     for t in tickers:
-        if earnings_flags.get(t):
-            risks[t] = {"risk": "high", "reason": "Upcoming earnings event"}
+        t_hard = hard_risks.get(t, {})
+        if t_hard:
+            top_risk = next(iter(t_hard))
+            risks[t] = {
+                "risk": "high",
+                "reason": t_hard[top_risk],
+                "flags": list(t_hard.keys()),
+            }
+        elif earnings_flags.get(t):
+            risks[t] = {"risk": "high", "reason": "Upcoming earnings event", "flags": ["earnings_soon"]}
         elif not news.get(t):
-            risks[t] = {"risk": "medium", "reason": "No recent news coverage"}
+            risks[t] = {"risk": "medium", "reason": "No recent news coverage", "flags": []}
         else:
-            risks[t] = {"risk": "low", "reason": "Normal — news available, no earnings"}
+            risks[t] = {"risk": "low", "reason": "Normal", "flags": []}
     return risks
 
+
+# ═══════════════════════════════════════════════════════════════
+# Main pipeline
+# ═══════════════════════════════════════════════════════════════
 
 async def run_pipeline(target_date: date) -> None:
     """Execute the full 4-step pipeline with checkpoint resume."""
@@ -120,7 +185,7 @@ async def run_pipeline(target_date: date) -> None:
 
             print(f"[{target_date}]   Fetching economic calendar...")
             econ_calendar = fetch_economic_calendar()
-            print(f"[{target_date}]   Got {len(econ_calendar)} high-impact events")
+            print(f"[{target_date}]   Got {len(econ_calendar)} events")
 
             history_block = _build_history_block(db)
             print(f"[{target_date}]   History context loaded")
@@ -163,7 +228,7 @@ async def run_pipeline(target_date: date) -> None:
 
         macro_context_str = format_macro_context(macro_parsed)
 
-        # ── Step 2: Micro Scoring (holdings + news + earnings) ──
+        # ── Step 2: Micro Scoring (holdings + news + earnings + hard risks) ──
         if row.status == "STEP1_DONE":
             print(f"[{target_date}] Running Step 2: Micro Scoring...")
 
@@ -173,6 +238,7 @@ async def run_pipeline(target_date: date) -> None:
 
             news: dict = {}
             earnings_flags: dict = {}
+            hard_risks: dict = {}
 
             if tickers:
                 print(f"[{target_date}]   Fetching company news...")
@@ -183,6 +249,14 @@ async def run_pipeline(target_date: date) -> None:
                 earnings_flags = {t: fetch_earnings_flag(t) for t in tickers}
                 upcoming = [t for t, v in earnings_flags.items() if v]
                 print(f"[{target_date}]   Earnings upcoming: {upcoming or 'none'}")
+
+                print(f"[{target_date}]   Scanning hard risks...")
+                hard_risks = scan_all_holdings_risks(tickers, news, earnings_flags)
+                flagged = {t: list(r.keys()) for t, r in hard_risks.items() if r}
+                if flagged:
+                    print(f"[{target_date}]   ⚠ Hard risk flags: {flagged}")
+                else:
+                    print(f"[{target_date}]   No hard risk flags")
 
             result = await run_micro_scoring(
                 target_date,
@@ -197,7 +271,7 @@ async def run_pipeline(target_date: date) -> None:
 
             # ── Update DailyNewsDigest with ticker_risks ──
             if tickers:
-                ticker_risks = _build_ticker_risks(tickers, earnings_flags, news)
+                ticker_risks = _build_ticker_risks(tickers, hard_risks, earnings_flags, news)
                 digest = db.query(DailyNewsDigest).filter_by(date=target_date).first()
                 if digest:
                     digest.ticker_risks = ticker_risks
@@ -218,7 +292,7 @@ async def run_pipeline(target_date: date) -> None:
             print(f"[{target_date}] Step 3 done.")
             print(f"[{target_date}]   Risk output (first 500 chars): {result[:500]}")
 
-        # ── Step 4: Format Weights (pure Python, no LLM) ──
+        # ── Step 4: Format Weights + Gated Regime Override ──
         if row.status == "STEP3_DONE":
             print(f"[{target_date}] Running Step 4: Normalize Weights...")
             weights = normalize_to_weights(row.step2_micro_result, row.step3_risk_result)
@@ -226,34 +300,51 @@ async def run_pipeline(target_date: date) -> None:
             row.status = "READY"
             db.commit()
 
-            # ── Write DecisionLog ──
+            # ── Gated Regime Override ──
             holdings_row = db.query(DailyHoldings).filter_by(date=target_date).first()
             qc_regime = None
             if holdings_row and holdings_row.payload:
                 qc_regime = holdings_row.payload.get("qc_regime")
 
-            ai_regime = macro_parsed.get("regime", "Neutral")
-            regime_override = (
-                qc_regime is not None
-                and qc_regime.lower() != ai_regime.lower()
+            effective_regime, was_overridden, override_reason = _apply_regime_override(
+                qc_regime, macro_parsed
             )
+            defense = _compute_defense_level(effective_regime)
 
+            # ── Collect hard risk flags for DecisionLog ──
+            digest = db.query(DailyNewsDigest).filter_by(date=target_date).first()
+            risk_flags_summary = {}
+            if digest and digest.ticker_risks:
+                for t, info in digest.ticker_risks.items():
+                    flags = info.get("flags", [])
+                    if flags:
+                        risk_flags_summary[t] = flags
+
+            # ── Write DecisionLog ──
             log = db.query(DecisionLog).filter_by(date=target_date).first()
             if not log:
                 log = DecisionLog(date=target_date)
                 db.add(log)
             log.qc_regime = qc_regime
-            log.ai_regime = ai_regime
-            log.regime_override = regime_override
+            log.ai_regime = macro_parsed.get("regime", "Neutral")
+            log.regime_override = was_overridden
             log.confidence = macro_parsed.get("confidence", 50)
-            log.defense_level = _compute_defense_level(qc_regime, ai_regime)
+            log.defense_level = defense
             log.final_weights = weights
-            log.reasoning = macro_parsed.get("reasoning", "")
+            log.reasoning = (
+                f"{macro_parsed.get('reasoning', '')}\n"
+                f"Override: {override_reason}"
+            )
+            if risk_flags_summary:
+                log.reasoning += f"\nHard risk flags: {json.dumps(risk_flags_summary)}"
             db.commit()
 
             print(f"[{target_date}] Pipeline complete!")
-            print(f"[{target_date}]   Regime: {ai_regime} | QC: {qc_regime} | "
-                  f"Override: {regime_override} | Defense: {log.defense_level}")
+            print(f"[{target_date}]   QC regime: {qc_regime} | AI regime: {log.ai_regime}")
+            print(f"[{target_date}]   Override: {was_overridden} → Effective: {effective_regime}")
+            print(f"[{target_date}]   Defense: {defense} | Reason: {override_reason}")
+            if risk_flags_summary:
+                print(f"[{target_date}]   Hard risks: {risk_flags_summary}")
             print(f"[{target_date}]   Tickers: {len(weights)}  Weights: {weights}")
             print(f"[{target_date}]   Sum: {sum(weights.values()):.4f}")
 

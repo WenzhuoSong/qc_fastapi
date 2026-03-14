@@ -114,6 +114,63 @@ def fetch_all_holdings_news(tickers: List[str]) -> Dict[str, List[dict]]:
     return {t: fetch_ticker_news(t) for t in tickers}
 
 
+# ═══════════════════════════════════════════════════════════════
+# Hard risk scanning (factual event detection)
+# ═══════════════════════════════════════════════════════════════
+
+_HARD_RISK_PATTERNS: Dict[str, List[str]] = {
+    "earnings_soon": ["earnings", "quarterly results", "revenue report", "eps"],
+    "fda_pending": ["fda approval", "fda decision", "fda review", "drug approval"],
+    "trading_halted": ["trading halt", "halted trading", "suspended trading"],
+    "acquisition_target": [
+        "acquisition", "merger", "takeover", "buyout",
+        "takeover bid", "merger agreement",
+    ],
+    "major_lawsuit": ["lawsuit", "class action", "sec investigation", "fraud"],
+}
+
+
+def scan_hard_risks(
+    ticker: str, news: List[dict], has_earnings: bool
+) -> Dict[str, str]:
+    """Scan a ticker's news for hard risk events that warrant automatic action.
+
+    Returns {risk_type: reason} for each detected risk. Empty dict = clean.
+    These are factual event detections, not predictions — high confidence.
+    """
+    risks: Dict[str, str] = {}
+
+    if has_earnings:
+        risks["earnings_soon"] = "Earnings report within 7 days"
+
+    combined_text = " ".join(
+        (a.get("headline", "") + " " + a.get("summary", "")).lower()
+        for a in news
+    )
+
+    for risk_type, keywords in _HARD_RISK_PATTERNS.items():
+        if risk_type == "earnings_soon":
+            continue
+        for kw in keywords:
+            if kw in combined_text:
+                risks[risk_type] = f"Detected keyword '{kw}' in recent news"
+                break
+
+    return risks
+
+
+def scan_all_holdings_risks(
+    tickers: List[str],
+    news: Dict[str, List[dict]],
+    earnings_flags: Dict[str, bool],
+) -> Dict[str, Dict[str, str]]:
+    """Batch-scan all holdings for hard risks. Returns {ticker: {risk_type: reason}}."""
+    return {
+        t: scan_hard_risks(t, news.get(t, []), earnings_flags.get(t, False))
+        for t in tickers
+    }
+
+
 def fetch_earnings_flag(ticker: str, days_ahead: int = 7) -> bool:
     """Check if a ticker has an earnings event within N days.
 
