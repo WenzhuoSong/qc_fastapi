@@ -6,7 +6,11 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.17
 
-# CrewAI - AI Agent Framework
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# CrewAI - AI Agent Framework (legacy, kept for backward compat)
 crewai>=0.11.0
 
 # LLM Support

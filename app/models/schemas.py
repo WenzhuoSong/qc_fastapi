@@ -49,3 +49,14 @@ class TaskResponse(BaseModel):
     created_at: str
     completed_at: Optional[str] = None
     result: Optional[str] = None
+
+
+# ── Allocation (V3.1 Chronos) ───────────────────────────────────────
+
+class AllocationResponse(BaseModel):
+    """Response returned to QuantConnect for portfolio rebalancing."""
+    date: str
+    status: str
+    is_stale: bool
+    weights: Dict[str, float]
+    message: Optional[str] = None

@@ -1,321 +1,177 @@
-# CrewAI + FastAPI Project Framework
+# Quant Agent Backend (V3.1 Chronos)
 
-An intelligent agent API service framework based on CrewAI and FastAPI, supporting the creation and management of AI agent teams to execute complex tasks.
+A quantitative trading backend that **pre-computes portfolio allocations** using LLM-powered research and serves them via a lightweight API gateway to QuantConnect.
+
+**Core Philosophy**: Computation and delivery are fully separated. Heavy LLM inference runs on a schedule (Cron), while the API only queries the database — guaranteeing <10ms response times and zero timeout risk.
+
+## Architecture
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Cron Pipeline   │────▶│   PostgreSQL     │◀────│  FastAPI Gateway │
+│  (14:00 ET daily)│     │   (SSOT)         │     │  (24/7)          │
+│                  │     │                  │     │                  │
+│  Step 1: Macro   │     │  daily_decisions │     │  GET /allocation │
+│  Step 2: Micro   │     │  - status        │     │  - is_stale flag │
+│  Step 3: Risk    │     │  - checkpoints   │     │  - Bearer auth   │
+│  Step 4: Format  │     │  - final_weights │     │                  │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                                                         ▲
+                                                         │
+                                                  QuantConnect
+```
 
 ## Project Structure
 
 ```
 qc_fastapi/
+├── cron_pipeline.py              # Cron Job entry — checkpoint-based daily pipeline
 ├── app/
-│   ├── api/
-│   │   └── v1/
-│   │       ├── endpoints/
-│   │       │   ├── crew.py          # CrewAI related APIs
-│   │       │   ├── health.py        # Health checks
-│   │       │   └── tasks.py         # Task management
-│   │       └── router.py            # Route aggregation
+│   ├── api/v1/
+│   │   ├── endpoints/
+│   │   │   ├── allocation.py     # GET /allocation (lightweight DB query)
+│   │   │   ├── crew.py           # CrewAI endpoints (legacy)
+│   │   │   ├── health.py         # Health checks
+│   │   │   └── tasks.py          # Task management (legacy)
+│   │   └── router.py
 │   ├── core/
-│   │   ├── security.py              # Bearer Token authentication
-│   │   ├── cache.py                 # TTL cache for crew results
-│   │   └── tools.py                 # Custom tools
+│   │   ├── security.py           # Bearer Token authentication
+│   │   ├── cache.py              # TTL cache
+│   │   ├── notifier.py           # Telegram alerts
+│   │   └── tools.py              # Custom tools (legacy)
+│   ├── db/
+│   │   ├── database.py           # SQLAlchemy connection pool
+│   │   └── models.py             # daily_decisions ORM (checkpoint state machine)
 │   ├── models/
-│   │   └── schemas.py               # Centralized Pydantic schemas
-│   ├── services/
-│   │   ├── crew_service.py          # CrewAI orchestration
-│   │   ├── agents.py                # Agent definitions
-│   │   └── tasks_def.py             # Task definitions
-│   ├── config.py                    # Application configuration
-│   └── main.py                      # FastAPI main application
-├── tests/                           # Test files
-├── requirements.txt                 # Dependency management
-├── run.py                          # Startup script
-├── example_usage.py                # Usage examples
-└── README.md                       # Project documentation
+│   │   └── schemas.py            # Pydantic schemas (AllocationResponse, etc.)
+│   ├── pipeline/
+│   │   ├── prompts.py            # All LLM prompts in one place
+│   │   ├── step1_macro.py        # Macro regime analysis
+│   │   ├── step2_micro.py        # Sector ETF scoring
+│   │   ├── step3_risk.py         # Risk audit & guardrails
+│   │   └── step4_format.py       # Normalize to portfolio weights
+│   ├── services/                 # CrewAI services (legacy)
+│   ├── config.py                 # Pydantic settings
+│   └── main.py                   # FastAPI app entry
+├── tests/
+├── Dockerfile
+├── railway.toml
+└── requirements.txt
 ```
-
-## Prerequisites
-
-- **Python**: 3.10, 3.11, 3.12, or 3.13 (3.11 recommended)
-- **pip**: 21.0 or higher
-- **Virtual Environment**: Recommended (venv or conda)
-
-> **Note**: Python 3.14+ is not yet fully supported by all dependencies (e.g., numpy, crewai). Please use Python 3.10-3.13 for full functionality.
 
 ## Quick Start
 
 ### 1. Install Dependencies
 
 ```bash
-# Create virtual environment
 python -m venv venv
-
-# Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# Install dependencies
+venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables
+### 2. Configure Environment
 
 ```bash
-# Copy environment template
 cp env_example.txt .env
-
-# Edit .env file and set your keys
-OPENAI_API_KEY=your_api_key_here
-API_TOKEN=your_secret_api_token_here   # leave empty to disable auth in dev
+# Edit .env: set OPENAI_API_KEY, API_TOKEN, DATABASE_URL
 ```
 
-### 3. Start the Service
+### 3. Start the API Gateway
 
 ```bash
-# Development mode (with hot reload)
 python run.py
-
-# Or start directly with uvicorn
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# API docs: http://localhost:8000/docs
 ```
 
-After starting, access:
-- API Documentation: http://localhost:8000/docs
-- Health Check: http://localhost:8000/health
+### 4. Run the Cron Pipeline (locally)
+
+```bash
+# Run for today
+python cron_pipeline.py
+
+# Run for a specific date
+python cron_pipeline.py 2026-03-14
+```
 
 ## API Endpoints
 
-### Health Check
+### Public
 
-```bash
-GET /health
-GET /api/v1/health/
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/api/v1/health/ready` | Readiness check |
 
-### CrewAI Agents
+### Authenticated (Bearer Token)
 
-```bash
-# Get Crew information
-GET /api/v1/crew/info
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/allocation/` | **Get portfolio weights** (core endpoint for QC) |
+| POST | `/api/v1/crew/execute` | Execute CrewAI task (legacy) |
+| GET | `/api/v1/crew/info` | Crew configuration info |
 
-# List available agents
-GET /api/v1/crew/agents
+### Allocation Response Format
 
-# Execute Crew task
-POST /api/v1/crew/execute
-Content-Type: application/json
-
+```json
 {
-    "topic": "Applications of AI in Healthcare"
+    "date": "2026-03-14",
+    "status": "READY",
+    "is_stale": false,
+    "weights": {
+        "XLK": 0.35,
+        "XLF": 0.25,
+        "XLV": 0.15,
+        "XLE": 0.10,
+        "XLI": 0.08,
+        "XLP": 0.04,
+        "XLU": 0.03
+    },
+    "message": null
 }
 ```
 
-### Task Management
+**`is_stale` graceful degradation**:
+- `false` — Today's allocation is fresh and READY
+- `true` — Fell back to the most recent valid allocation (non-trading day, pipeline error, etc.)
 
-```bash
-# Create task
-POST /api/v1/tasks/
-Content-Type: application/json
+## Checkpoint State Machine
 
-{
-    "name": "Research Task",
-    "description": "Research latest advances in quantum computing",
-    "agent_role": "Researcher",
-    "expected_output": "A research report"
-}
+The pipeline uses a database-backed state machine for fault tolerance:
 
-# List all tasks
-GET /api/v1/tasks/
-
-# Get task details
-GET /api/v1/tasks/{task_id}
-
-# Delete task
-DELETE /api/v1/tasks/{task_id}
+```
+INIT → STEP1_DONE → STEP2_DONE → STEP3_DONE → READY
+  ↓                                               
+ERROR (resume from last checkpoint on retry)
 ```
 
-## Usage Examples
+If the pipeline crashes at Step 2, rerunning it will skip Step 1 (already saved) and resume from Step 2. No duplicate LLM calls, no wasted money.
 
-### Python Client Example
+## Railway Deployment
 
-```python
-import requests
+### Services Required
 
-# Execute Crew task
-response = requests.post(
-    "http://localhost:8000/api/v1/crew/execute",
-    json={"topic": "Applications of AI in Healthcare"},
-    timeout=300
-)
+1. **PostgreSQL** — Add via Railway Dashboard → New → Database → PostgreSQL
+2. **Web Service** — Your FastAPI gateway (this repo, auto-deploys from GitHub)
+3. **Cron Job** — Runs `python cron_pipeline.py` daily at `0 18 * * 1-5` (14:00 ET = 18:00 UTC, weekdays only)
 
-result = response.json()
-print(result["result"])
-```
+### Environment Variables
 
-### Command Line Example
-
-```bash
-# Get Crew information
-python example_usage.py crew_info
-
-# Execute Crew task
-python example_usage.py execute
-
-# Task management example
-python example_usage.py tasks
-```
-
-## Authentication
-
-All endpoints (except `/health`) require a Bearer token when `API_TOKEN` is set:
-
-```bash
-curl -H "Authorization: Bearer your_secret_api_token_here" \
-     http://localhost:8000/api/v1/crew/info
-```
-
-When `API_TOKEN` is empty (local development), authentication is skipped.
-
-## Caching
-
-Crew execution results are cached in memory with a **5-minute TTL** (configurable in `app/core/cache.py`). Identical requests within the TTL window return cached results instantly without calling the LLM again. The response includes `"from_cache": true` when served from cache.
-
-## Default Agent Team
-
-The project includes a pre-configured content creation team with three agents:
-
-1. **Researcher** - Conducts in-depth research on specified topics, collecting comprehensive and accurate information
-2. **Content Writer** - Transforms research content into high-quality, readable articles
-3. **Editor** - Reviews content quality to ensure accuracy and consistency
-
-## Custom Configuration
-
-### Custom Agents
-
-Modify the `_create_default_agents` method in `app/services/crew_service.py`:
-
-```python
-def _create_default_agents(self) -> List[Agent]:
-    custom_agent = Agent(
-        role="Data Analyst",
-        goal="Analyze data and provide insights",
-        backstory="You are an experienced data analyst...",
-        verbose=True,
-        allow_delegation=False,
-    )
-    return [custom_agent]
-```
-
-### Custom Tasks
-
-Modify the `_create_default_tasks` method:
-
-```python
-def _create_default_tasks(self) -> List[Task]:
-    custom_task = Task(
-        description="Analyze data for {topic}",
-        expected_output="Data analysis report",
-        agent=self.default_agents[0],
-    )
-    return [custom_task]
-```
-
-## Development
-
-### Run Tests
-
-```bash
-pytest tests/
-```
-
-### Code Formatting
-
-```bash
-black app/
-```
-
-## Deployment
-
-### Railway Deployment (Recommended)
-
-本项目已配置好 Docker 支持，可一键部署到 Railway：
-
-#### 1. 准备工作
-
-确保已安装 [Railway CLI](https://docs.railway.app/develop/cli) 并登录：
-
-```bash
-# 安装 Railway CLI
-npm install -g @railway/cli
-
-# 登录
-railway login
-```
-
-#### 2. 部署步骤
-
-```bash
-# 进入项目目录
-cd qc_fastapi
-
-# 初始化 Railway 项目
-railway init
-
-# 设置环境变量（必需）
-railway variables set OPENAI_API_KEY=your_api_key_here
-
-# 部署
-railway up
-```
-
-#### 3. 环境变量配置
-
-在 Railway Dashboard 或 CLI 中设置以下变量：
-
-| 变量名 | 说明 | 必需 |
-|--------|------|------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 | ✅ 是 |
-| `API_TOKEN` | API 鉴权令牌（留空则跳过鉴权） | ✅ 生产环境必需 |
-| `APP_NAME` | 应用名称 | ❌ 否（默认：CrewAI FastAPI Service） |
-| `DEBUG` | 调试模式 | ❌ 否（默认：false） |
-
-#### 4. 查看部署状态
-
-```bash
-# 查看部署日志
-railway logs
-
-# 打开部署后的网站
-railway open
-```
-
-#### 5. 自动部署
-
-连接 GitHub 仓库到 Railway 可实现自动部署：
-1. 在 Railway Dashboard 中选择项目
-2. 点击 Settings → Source
-3. 连接 GitHub 仓库
-4. 启用 Auto Deploy
-
-### Docker 本地测试
-
-```bash
-# 构建镜像
-docker build -t qc-fastapi .
-
-# 运行容器
-docker run -p 8000:8000 -e OPENAI_API_KEY=your_key qc-fastapi
-
-# 访问 http://localhost:8000/docs
-```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `API_TOKEN` | Yes (prod) | Bearer token for API auth |
+| `DATABASE_URL` | Yes | PostgreSQL connection string (auto-provided by Railway) |
+| `TG_BOT_TOKEN` | No | Telegram bot token for alerts |
+| `TG_CHAT_ID` | No | Telegram chat ID for alerts |
 
 ## Tech Stack
 
-- **FastAPI** - Modern, fast web framework
-- **CrewAI** - AI agent orchestration framework
-- **Pydantic** - Data validation and settings management
-- **Uvicorn** - ASGI server
+- **FastAPI** — Lightweight API gateway
+- **PostgreSQL** — Persistent checkpoint storage (SSOT)
+- **SQLAlchemy** — ORM and connection management
+- **OpenAI** — LLM-powered research pipeline
+- **Pydantic** — Data validation and settings
+- **Uvicorn** — ASGI server
 
 ## License
 

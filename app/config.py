@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     """Application configuration class"""
     
     # Application info
-    APP_NAME: str = "CrewAI FastAPI App"
-    APP_VERSION: str = "0.1.0"
+    APP_NAME: str = "Quant Agent Backend"
+    APP_VERSION: str = "3.1.0"
     DEBUG: bool = False
     
     # Server settings
@@ -21,14 +21,16 @@ class Settings(BaseSettings):
     # API authentication (leave empty to disable auth in local dev)
     API_TOKEN: str = ""
     
+    # PostgreSQL (Railway provides DATABASE_URL automatically)
+    DATABASE_URL: str = ""
+    
     # OpenAI configuration
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
     
-    # Azure OpenAI (optional)
-    AZURE_OPENAI_API_KEY: str = ""
-    AZURE_OPENAI_ENDPOINT: str = ""
-    AZURE_OPENAI_API_VERSION: str = "2024-02-15-preview"
+    # Telegram alerts (optional)
+    TG_BOT_TOKEN: str = ""
+    TG_CHAT_ID: str = ""
     
     class Config:
         env_file = ".env"
