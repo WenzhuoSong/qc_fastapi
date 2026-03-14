@@ -14,12 +14,12 @@ from app.pipeline.prompts import RISK_SYSTEM, RISK_USER
 
 async def run_risk_audit(
     target_date: date,
-    macro_result: str,
+    macro_context: str,
     micro_result: str,
 ) -> str:
     """Audit the proposed scores against risk constraints.
 
-    TODO: Replace mock with real OpenAI call once prompts are finalized.
+    macro_context is a pre-formatted string from format_macro_context().
     """
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-test"):
         await asyncio.sleep(1)
@@ -38,7 +38,7 @@ async def run_risk_audit(
             {"role": "system", "content": RISK_SYSTEM},
             {"role": "user", "content": RISK_USER.format(
                 date=target_date,
-                macro_result=macro_result,
+                macro_context=macro_context,
                 micro_result=micro_result,
             )},
         ],

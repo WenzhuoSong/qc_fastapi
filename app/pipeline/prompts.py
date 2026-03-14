@@ -5,7 +5,7 @@ All LLM prompts live here so they are easy to review, version, and A/B test.
 Literal braces in JSON examples are doubled ({{ }}) to survive .format().
 """
 
-# ── Step 1: Macro Regime Analysis ────────────────────────────────────
+# ── Step 1: Macro Regime Analysis (structured JSON output) ───────────
 
 MACRO_SYSTEM = (
     "You are a senior macro strategist at a global hedge fund. "
@@ -18,11 +18,18 @@ MACRO_USER = (
     "Today is {date}.\n\n"
     "## Recent Market News (last 24 h)\n{macro_news}\n\n"
     "## Upcoming Economic Events\n{econ_calendar}\n\n"
-    "Based on the above, provide:\n"
-    "1. Overall market regime (risk-on / risk-off / neutral)\n"
-    "2. Sector rotation thesis (which sectors to overweight / underweight)\n"
-    "3. Key risks to monitor this week\n\n"
-    "Be concise and actionable. Ground every claim in the news provided."
+    "## Recent 5-Day Market Context (for trend awareness)\n{history_block}\n\n"
+    "Based on ALL of the above (today's news, economic events, and recent "
+    "trend context), provide your analysis.\n\n"
+    "Return ONLY this JSON as your first output (no markdown fences, "
+    "replace every <...> placeholder with your actual analysis):\n"
+    '{{"regime": "<Risk-On or Risk-Off or Neutral>",'
+    ' "confidence": <integer 0-100>,'
+    ' "summary": "<one-sentence macro summary, max 100 words>",'
+    ' "key_events": ["<event1>", "<event2>", "<event3>"],'
+    ' "sector_thesis": "<which sectors to overweight/underweight and why>",'
+    ' "reasoning": "<2-3 sentences explaining why you chose this regime>"}}\n\n'
+    "Then optionally add extra commentary below the JSON."
 )
 
 # ── Step 2: Micro Scoring (with holdings + news + earnings) ──────────
@@ -36,7 +43,7 @@ MICRO_SYSTEM = (
 
 MICRO_USER = (
     "Today is {date}.\n\n"
-    "## Macro Context\n{macro_result}\n\n"
+    "## Macro Context\n{macro_context}\n\n"
     "## Current Portfolio Holdings\n{holdings}\n\n"
     "## Recent News by Ticker\n{news_digest}\n\n"
     "## Earnings Calendar Flags\n{earnings_flags}\n\n"
@@ -67,7 +74,7 @@ RISK_SYSTEM = (
 
 RISK_USER = (
     "Today is {date}.\n\n"
-    "## Macro View\n{macro_result}\n\n"
+    "## Macro View\n{macro_context}\n\n"
     "## Proposed Scores\n{micro_result}\n\n"
     "Review for:\n"
     "1. Max single-sector exposure should not exceed 40%\n"

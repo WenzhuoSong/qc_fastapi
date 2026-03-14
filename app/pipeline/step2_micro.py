@@ -54,12 +54,15 @@ def _format_earnings_flags(flags: Dict[str, bool]) -> str:
 
 async def run_micro_scoring(
     target_date: date,
-    macro_result: str,
+    macro_context: str,
     holdings: List[str] | None = None,
     news: Dict[str, List[dict]] | None = None,
     earnings_flags: Dict[str, bool] | None = None,
 ) -> str:
-    """Score sector ETFs given macro backdrop, holdings, news, and earnings."""
+    """Score sector ETFs given macro backdrop, holdings, news, and earnings.
+
+    macro_context is a pre-formatted string from format_macro_context().
+    """
     holdings_str = ", ".join(holdings) if holdings else "(no holdings reported)"
     news_digest = _format_news_digest(news or {})
     earnings_str = _format_earnings_flags(earnings_flags or {})
@@ -82,7 +85,7 @@ async def run_micro_scoring(
             {"role": "system", "content": MICRO_SYSTEM},
             {"role": "user", "content": MICRO_USER.format(
                 date=target_date,
-                macro_result=macro_result,
+                macro_context=macro_context,
                 holdings=holdings_str,
                 news_digest=news_digest,
                 earnings_flags=earnings_str,
