@@ -60,3 +60,17 @@ class AllocationResponse(BaseModel):
     is_stale: bool
     weights: Dict[str, float]
     message: Optional[str] = None
+
+
+# ── Holdings (QC 10:00 ET Snapshot) ──────────────────────────────────
+
+class HoldingsRequest(BaseModel):
+    """Payload from QuantConnect reporting current positions."""
+    current_holdings: List[str]
+    qc_regime: Optional[str] = None
+    account_dd: Optional[float] = None
+
+
+class HoldingsResponse(BaseModel):
+    status: str
+    message: str
