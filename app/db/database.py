@@ -48,6 +48,12 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def SessionLocal() -> Session:
+    """Create a new DB session (for use outside FastAPI, e.g. cron_pipeline)."""
+    factory = _get_session_factory()
+    return factory()
+
+
 def init_db() -> None:
     """Create all tables if they don't exist yet."""
     engine = _get_engine()
