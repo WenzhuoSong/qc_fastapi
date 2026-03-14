@@ -2,12 +2,14 @@
 Application Configuration Management
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 
 class Settings(BaseSettings):
     """Application configuration class"""
+    
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
     
     # Application info
     APP_NAME: str = "Quant Agent Backend"
@@ -31,10 +33,6 @@ class Settings(BaseSettings):
     # Telegram alerts (optional)
     TG_BOT_TOKEN: str = ""
     TG_CHAT_ID: str = ""
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 @lru_cache()
