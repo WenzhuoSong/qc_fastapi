@@ -5,7 +5,7 @@ Designed to run as a Railway Cron Job (e.g. every day at 14:00 ET).
 Each step checks the database first; if a checkpoint exists, it skips
 to the next step. This guarantees:
   - No duplicate LLM calls (saves money)
-  - Resume-on-failure (断点续传)
+  - Resume-on-failure
   - Total timeout protection with Telegram alerting
 
 Usage:
@@ -24,7 +24,12 @@ from app.config import settings
 from app.db.database import SessionLocal, init_db
 from app.db.models import DailyDecision, DailyHoldings
 from app.core.notifier import send_alert
-from app.pipeline.data_fetcher import DataFetcher
+from app.pipeline.data_fetcher import (
+    fetch_macro_news,
+    fetch_economic_calendar,
+    fetch_all_holdings_news,
+    fetch_earnings_flag,
+)
 from app.pipeline.step1_macro import run_macro_analysis
 from app.pipeline.step2_micro import run_micro_scoring
 from app.pipeline.step3_risk import run_risk_audit
@@ -48,10 +53,23 @@ async def run_pipeline(target_date: date) -> None:
             print(f"[{target_date}] Already READY, skipping.")
             return
 
-        # ── Step 1: Macro Analysis ──
+        # ── Step 1: Macro Analysis (with real news + calendar) ──
         if row.status in ("INIT", "ERROR"):
             print(f"[{target_date}] Running Step 1: Macro Analysis...")
-            result = await run_macro_analysis(target_date)
+
+            print(f"[{target_date}]   Fetching macro news...")
+            macro_news = fetch_macro_news()
+            print(f"[{target_date}]   Got {len(macro_news)} news articles")
+
+            print(f"[{target_date}]   Fetching economic calendar...")
+            econ_calendar = fetch_economic_calendar()
+            print(f"[{target_date}]   Got {len(econ_calendar)} high-impact events")
+
+            result = await run_macro_analysis(
+                target_date,
+                macro_news=macro_news,
+                econ_calendar=econ_calendar,
+            )
             row.step1_macro_result = result
             row.status = "STEP1_DONE"
             row.error_log = None
@@ -59,7 +77,7 @@ async def run_pipeline(target_date: date) -> None:
             print(f"[{target_date}] Step 1 done.")
             print(f"[{target_date}]   Macro output (first 300 chars): {result[:300]}")
 
-        # ── Step 2: Micro Scoring (with holdings + news) ──
+        # ── Step 2: Micro Scoring (holdings + news + earnings) ──
         if row.status == "STEP1_DONE":
             print(f"[{target_date}] Running Step 2: Micro Scoring...")
 
@@ -67,17 +85,25 @@ async def run_pipeline(target_date: date) -> None:
             tickers = holdings_row.tickers if holdings_row else None
             print(f"[{target_date}]   Holdings: {tickers or '(none reported)'}")
 
-            news = {}
+            news: dict = {}
+            earnings_flags: dict = {}
+
             if tickers:
-                fetcher = DataFetcher()
-                news = await fetcher.fetch_ticker_news(tickers)
+                print(f"[{target_date}]   Fetching company news...")
+                news = fetch_all_holdings_news(tickers)
                 print(f"[{target_date}]   News fetched for {len(news)} tickers")
+
+                print(f"[{target_date}]   Checking earnings calendar...")
+                earnings_flags = {t: fetch_earnings_flag(t) for t in tickers}
+                upcoming = [t for t, v in earnings_flags.items() if v]
+                print(f"[{target_date}]   Earnings upcoming: {upcoming or 'none'}")
 
             result = await run_micro_scoring(
                 target_date,
                 row.step1_macro_result,
                 holdings=tickers,
                 news=news,
+                earnings_flags=earnings_flags,
             )
             row.step2_micro_result = result
             row.status = "STEP2_DONE"

@@ -1,90 +1,138 @@
 """
-Data Fetcher — External API Integration (Finnhub)
+Data Fetcher — Finnhub Market Data Integration
 
-Provides market news and earnings data as context for the LLM pipeline.
-All external calls have timeouts and graceful error handling so a single
-ticker failure never crashes the entire pipeline.
+Two layers of data:
+  1. Macro:  general market news + economic calendar   → feeds Step 1
+  2. Micro:  per-ticker company news + earnings flags  → feeds Step 2
+
+All calls use sync httpx (already in deps) with timeouts and graceful
+error handling so a single API failure never crashes the pipeline.
 """
 
-import asyncio
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import Dict, List
 
 import httpx
 
 from app.config import settings
 
+_BASE = "https://finnhub.io/api/v1"
+_TIMEOUT = 10
 
-class DataFetcher:
-    BASE_URL = "https://finnhub.io/api/v1"
-    MAX_NEWS_PER_TICKER = 5
-    REQUEST_TIMEOUT = 10
 
-    def __init__(self) -> None:
-        self.token = settings.FINNHUB_API_KEY
+def _token() -> str:
+    return settings.FINNHUB_API_KEY
 
-    async def fetch_ticker_news(
-        self, tickers: List[str], days_back: int = 2
-    ) -> Dict[str, List[str]]:
-        """Fetch recent company news for a list of tickers.
 
-        Returns {"NVDA": ["headline: summary", ...], "AAPL": [...]}
-        """
-        if not self.token:
-            print("[DataFetcher] FINNHUB_API_KEY not set, returning empty news")
-            return {t: [] for t in tickers}
+# ═══════════════════════════════════════════════════════════════
+# Macro data (Step 1)
+# ═══════════════════════════════════════════════════════════════
 
-        end_date = datetime.now().strftime("%Y-%m-%d")
-        start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-
-        results: Dict[str, List[str]] = {}
-
-        async with httpx.AsyncClient(timeout=self.REQUEST_TIMEOUT) as client:
-            for ticker in tickers:
-                results[ticker] = await self._fetch_one(
-                    client, ticker, start_date, end_date
-                )
-                await asyncio.sleep(0.2)  # respect Finnhub rate limit
-
-        return results
-
-    async def _fetch_one(
-        self,
-        client: httpx.AsyncClient,
-        ticker: str,
-        start_date: str,
-        end_date: str,
-    ) -> List[str]:
-        try:
-            resp = await client.get(
-                f"{self.BASE_URL}/company-news",
-                params={
-                    "symbol": ticker,
-                    "from": start_date,
-                    "to": end_date,
-                    "token": self.token,
-                },
-            )
-            if resp.status_code != 200:
-                print(f"[DataFetcher] {ticker}: HTTP {resp.status_code}")
-                return []
-
-            articles = resp.json()
-            return [
-                f"{a['headline']}: {a.get('summary', '')}"
-                for a in articles[: self.MAX_NEWS_PER_TICKER]
-                if a.get("headline")
-            ]
-
-        except Exception as e:
-            print(f"[DataFetcher] {ticker} error: {e}")
-            return []
-
-    async def check_earnings_calendar(
-        self, tickers: List[str], days_ahead: int = 3
-    ) -> List[str]:
-        """Return tickers that have earnings within the next N days.
-
-        TODO: Implement via Finnhub /calendar/earnings endpoint.
-        """
+def fetch_macro_news(limit: int = 20) -> List[dict]:
+    """Fetch latest general market news (past ~24 h)."""
+    if not _token():
         return []
+    try:
+        resp = httpx.get(
+            f"{_BASE}/news",
+            params={"category": "general", "token": _token()},
+            timeout=_TIMEOUT,
+        )
+        items = resp.json()[:limit]
+        return [
+            {
+                "headline": it.get("headline", ""),
+                "summary": it.get("summary", ""),
+                "source": it.get("source", ""),
+            }
+            for it in items
+        ]
+    except Exception as e:
+        print(f"[DataFetcher] macro news error: {e}")
+        return []
+
+
+def fetch_economic_calendar(days_ahead: int = 3) -> List[dict]:
+    """Fetch upcoming high-impact economic events (Fed, CPI, NFP, etc.)."""
+    if not _token():
+        return []
+    today = datetime.utcnow().date()
+    end = today + timedelta(days=days_ahead)
+    try:
+        resp = httpx.get(
+            f"{_BASE}/calendar/economic",
+            params={"from": str(today), "to": str(end), "token": _token()},
+            timeout=_TIMEOUT,
+        )
+        events = resp.json().get("economicCalendar", [])
+        high = [e for e in events if e.get("impact") == "high"]
+        return high[:10]
+    except Exception as e:
+        print(f"[DataFetcher] econ calendar error: {e}")
+        return []
+
+
+# ═══════════════════════════════════════════════════════════════
+# Micro data (Step 2)
+# ═══════════════════════════════════════════════════════════════
+
+def fetch_ticker_news(ticker: str, days_back: int = 2, limit: int = 10) -> List[dict]:
+    """Fetch recent company news for a single ticker."""
+    if not _token():
+        return []
+    today = datetime.utcnow().date()
+    start = today - timedelta(days=days_back)
+    try:
+        resp = httpx.get(
+            f"{_BASE}/company-news",
+            params={
+                "symbol": ticker,
+                "from": str(start),
+                "to": str(today),
+                "token": _token(),
+            },
+            timeout=_TIMEOUT,
+        )
+        items = resp.json()[:limit]
+        return [
+            {
+                "headline": it.get("headline", ""),
+                "summary": it.get("summary", ""),
+                "source": it.get("source", ""),
+            }
+            for it in items
+        ]
+    except Exception as e:
+        print(f"[DataFetcher] {ticker} news error: {e}")
+        return []
+
+
+def fetch_all_holdings_news(tickers: List[str]) -> Dict[str, List[dict]]:
+    """Batch-fetch news for every holding. Returns {ticker: [articles]}."""
+    return {t: fetch_ticker_news(t) for t in tickers}
+
+
+def fetch_earnings_flag(ticker: str, days_ahead: int = 7) -> bool:
+    """Check if a ticker has an earnings event within N days.
+
+    Upcoming earnings = high-risk event → avoid new positions.
+    """
+    if not _token():
+        return False
+    today = datetime.utcnow().date()
+    end = today + timedelta(days=days_ahead)
+    try:
+        resp = httpx.get(
+            f"{_BASE}/calendar/earnings",
+            params={
+                "from": str(today),
+                "to": str(end),
+                "symbol": ticker,
+                "token": _token(),
+            },
+            timeout=_TIMEOUT,
+        )
+        items = resp.json().get("earningsCalendar", [])
+        return len(items) > 0
+    except Exception:
+        return False
