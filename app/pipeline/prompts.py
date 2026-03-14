@@ -48,10 +48,13 @@ MICRO_USER = (
     "- Factor in current holdings: avoid excessive turnover unless news warrants it\n"
     "- If a holding has an upcoming earnings event, reduce conviction on its sector "
     "to avoid binary risk\n\n"
-    "You MUST return EXACTLY this JSON format as the FIRST thing in your response "
-    "(no markdown fences, no preamble):\n"
-    '{{"XLK": 7, "XLF": 6, "XLV": 5, "XLE": 4, "XLI": 5, '
-    '"XLP": 3, "XLU": 2, "XLY": 6, "XLC": 5, "XLRE": 3, "XLB": 4}}\n\n'
+    "Return your scores as a JSON object as the FIRST thing in your response "
+    "(no markdown fences, no preamble). Use YOUR OWN scores based on the analysis — "
+    "the numbers below are just a format example, NOT a suggestion:\n"
+    '{{"XLK": <score>, "XLF": <score>, "XLV": <score>, "XLE": <score>, '
+    '"XLI": <score>, "XLP": <score>, "XLU": <score>, "XLY": <score>, '
+    '"XLC": <score>, "XLRE": <score>, "XLB": <score>}}\n\n'
+    "Replace each <score> with your 0-10 integer. "
     "Then provide a brief rationale below the JSON."
 )
 
