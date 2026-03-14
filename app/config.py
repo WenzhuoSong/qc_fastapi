@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
     
+    # Finnhub market data
+    FINNHUB_API_KEY: str = ""
+    
     # Telegram alerts (optional)
     TG_BOT_TOKEN: str = ""
     TG_CHAT_ID: str = ""

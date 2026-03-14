@@ -22,8 +22,9 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.database import SessionLocal, init_db
-from app.db.models import DailyDecision
+from app.db.models import DailyDecision, DailyHoldings
 from app.core.notifier import send_alert
+from app.pipeline.data_fetcher import DataFetcher
 from app.pipeline.step1_macro import run_macro_analysis
 from app.pipeline.step2_micro import run_micro_scoring
 from app.pipeline.step3_risk import run_risk_audit
@@ -57,10 +58,26 @@ async def run_pipeline(target_date: date) -> None:
             db.commit()
             print(f"[{target_date}] Step 1 done.")
 
-        # ── Step 2: Micro Scoring ──
+        # ── Step 2: Micro Scoring (with holdings + news) ──
         if row.status == "STEP1_DONE":
             print(f"[{target_date}] Running Step 2: Micro Scoring...")
-            result = await run_micro_scoring(target_date, row.step1_macro_result)
+
+            holdings_row = db.query(DailyHoldings).filter_by(date=target_date).first()
+            tickers = holdings_row.tickers if holdings_row else None
+            print(f"[{target_date}]   Holdings: {tickers or '(none reported)'}")
+
+            news = {}
+            if tickers:
+                fetcher = DataFetcher()
+                news = await fetcher.fetch_ticker_news(tickers)
+                print(f"[{target_date}]   News fetched for {len(news)} tickers")
+
+            result = await run_micro_scoring(
+                target_date,
+                row.step1_macro_result,
+                holdings=tickers,
+                news=news,
+            )
             row.step2_micro_result = result
             row.status = "STEP2_DONE"
             db.commit()
