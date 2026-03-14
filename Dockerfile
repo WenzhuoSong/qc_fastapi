@@ -14,13 +14,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # 安装系统依赖（编译某些 Python 包需要）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    build-essential libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 先复制依赖文件（利用 Docker 缓存层）
 COPY requirements.txt .
 
-# 安装 Python 依赖
+# 安装 Python 依赖 (V3.1)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制项目代码
