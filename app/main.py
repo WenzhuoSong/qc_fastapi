@@ -22,8 +22,11 @@ async def lifespan(app: FastAPI):
     print(f"API auth enabled: {bool(settings.API_TOKEN)}")
     print(f"Database configured: {bool(settings.DATABASE_URL)}")
     if settings.DATABASE_URL:
-        init_db()
-        print("Database tables initialized")
+        try:
+            init_db()
+            print("Database tables initialized")
+        except Exception as e:
+            print(f"WARNING: Database init failed (app will still serve non-DB endpoints): {e}")
     yield
     print("Application shutting down")
 
