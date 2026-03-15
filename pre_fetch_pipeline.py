@@ -158,16 +158,20 @@ async def process_ticker(db: Session, ticker: str, target_date: date) -> int:
 
     count = 0
     for item, summary_data in zip(new_headlines, summaries):
-        db.add(TickerNewsLibrary(
-            ticker=ticker,
-            date=target_date,
-            headline=item.get("headline", ""),
-            source=item.get("source", ""),
-            llm_summary=summary_data.get("summary", ""),
-            sentiment=summary_data.get("sentiment", "neutral"),
-            is_hard_event=summary_data.get("is_hard_event", False),
-        ))
-        count += 1
+        try:
+            db.add(TickerNewsLibrary(
+                ticker=ticker,
+                date=target_date,
+                headline=item.get("headline", ""),
+                source=item.get("source", ""),
+                llm_summary=summary_data.get("summary", ""),
+                sentiment=summary_data.get("sentiment", "neutral"),
+                is_hard_event=summary_data.get("is_hard_event", False),
+            ))
+            db.flush()
+            count += 1
+        except Exception:
+            db.rollback()
 
     db.commit()
     return count
