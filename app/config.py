@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # OpenAI configuration
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_MODEL_HEAVY: str = "gpt-4o"
     
     # Finnhub market data
     FINNHUB_API_KEY: str = ""

@@ -33,7 +33,7 @@ async def run_risk_audit(
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     response = await client.chat.completions.create(
-        model=settings.OPENAI_MODEL,
+        model=settings.OPENAI_MODEL_HEAVY,
         messages=[
             {"role": "system", "content": RISK_SYSTEM},
             {"role": "user", "content": RISK_USER.format(

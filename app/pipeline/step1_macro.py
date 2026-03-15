@@ -111,7 +111,7 @@ async def run_macro_analysis(
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     response = await client.beta.chat.completions.parse(
-        model=settings.OPENAI_MODEL,
+        model=settings.OPENAI_MODEL_HEAVY,
         messages=[
             {"role": "system", "content": STEP1_SYSTEM},
             {"role": "user", "content": user_msg},
