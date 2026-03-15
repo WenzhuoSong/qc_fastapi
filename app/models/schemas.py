@@ -89,8 +89,13 @@ class DecisionLogUpdate(BaseModel):
 # ── Holdings (QC 10:00 ET Snapshot) ──────────────────────────────────
 
 class HoldingsRequest(BaseModel):
-    """Payload from QuantConnect reporting current positions + momentum candidates."""
-    current_holdings: List[str]
+    """Payload from QuantConnect reporting current positions + momentum candidates.
+
+    current_holdings accepts two formats:
+      list: ["AAOI", "GE", "RTX"]
+      dict: {"AAOI": {"weight": 0.15, "gain_pct": -17.7, "days_held": 5}, ...}
+    """
+    current_holdings: Any
     top_candidates: Optional[List[str]] = None
     qc_regime: Optional[str] = None
     account_dd: Optional[float] = None
@@ -98,4 +103,6 @@ class HoldingsRequest(BaseModel):
 
 class HoldingsResponse(BaseModel):
     status: str
-    message: str
+    date: Optional[str] = None
+    tickers: Optional[List[str]] = None
+    message: Optional[str] = None
