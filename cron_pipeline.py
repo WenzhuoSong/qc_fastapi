@@ -14,11 +14,14 @@ Usage:
 """
 
 import sys
+import time
 import json
 import asyncio
 import traceback
 from datetime import date, datetime
 from typing import Dict, Any, List
+
+import httpx
 
 from sqlalchemy.orm import Session
 
@@ -359,6 +362,19 @@ async def run_pipeline(target_date: date) -> None:
         db.close()
 
 
+def _wait_for_network(max_retries: int = 5, delay: int = 3) -> bool:
+    """Block until outbound HTTPS is reachable (cold-start network init)."""
+    for i in range(max_retries):
+        try:
+            httpx.get("https://finnhub.io", timeout=5)
+            print("[NET] Network ready")
+            return True
+        except Exception as e:
+            print(f"[NET] Waiting for network... attempt {i + 1}/{max_retries}: {e}")
+            time.sleep(delay)
+    return False
+
+
 async def main() -> None:
     """Entry point with global timeout and Telegram alerting."""
     target = date.today()
@@ -366,6 +382,12 @@ async def main() -> None:
         target = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
 
     print(f"=== Cron Pipeline Start: {target} ===")
+
+    if not _wait_for_network():
+        msg = f"Network unavailable after retries for {target}"
+        print(f"[FATAL] {msg}")
+        await send_alert(msg)
+        sys.exit(1)
 
     init_db()
 

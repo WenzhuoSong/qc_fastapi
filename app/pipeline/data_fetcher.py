@@ -5,10 +5,11 @@ Two layers of data:
   1. Macro:  general market news + economic calendar   → feeds Step 1
   2. Micro:  per-ticker company news + earnings flags  → feeds Step 2
 
-All calls use sync httpx (already in deps) with timeouts and graceful
-error handling so a single API failure never crashes the pipeline.
+All calls use sync httpx with timeouts, exponential backoff retry,
+and graceful error handling so a single API failure never crashes the pipeline.
 """
 
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List
 
@@ -18,6 +19,19 @@ from app.config import settings
 
 _BASE = "https://finnhub.io/api/v1"
 _TIMEOUT = 10
+_MAX_RETRIES = 3
+
+
+def _get(url: str, params: dict) -> httpx.Response:
+    """HTTP GET with exponential backoff retry for transient network errors."""
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return httpx.get(url, params=params, timeout=_TIMEOUT)
+        except Exception:
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)
+            else:
+                raise
 
 
 def _token() -> str:
@@ -33,10 +47,9 @@ def fetch_macro_news(limit: int = 20) -> List[dict]:
     if not _token():
         return []
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE}/news",
             params={"category": "general", "token": _token()},
-            timeout=_TIMEOUT,
         )
         items = resp.json()[:limit]
         return [
@@ -59,10 +72,9 @@ def fetch_economic_calendar(days_ahead: int = 3) -> List[dict]:
     today = datetime.utcnow().date()
     end = today + timedelta(days=days_ahead)
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE}/calendar/economic",
             params={"from": str(today), "to": str(end), "token": _token()},
-            timeout=_TIMEOUT,
         )
         events = resp.json().get("economicCalendar", [])
         high = [e for e in events if e.get("impact") == "high"]
@@ -85,7 +97,7 @@ def fetch_ticker_news(ticker: str, days_back: int = 2, limit: int = 10) -> List[
     today = datetime.utcnow().date()
     start = today - timedelta(days=days_back)
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE}/company-news",
             params={
                 "symbol": ticker,
@@ -93,7 +105,6 @@ def fetch_ticker_news(ticker: str, days_back: int = 2, limit: int = 10) -> List[
                 "to": str(today),
                 "token": _token(),
             },
-            timeout=_TIMEOUT,
         )
         items = resp.json()[:limit]
         return [
@@ -181,7 +192,7 @@ def fetch_earnings_flag(ticker: str, days_ahead: int = 7) -> bool:
     today = datetime.utcnow().date()
     end = today + timedelta(days=days_ahead)
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE}/calendar/earnings",
             params={
                 "from": str(today),
@@ -189,7 +200,6 @@ def fetch_earnings_flag(ticker: str, days_ahead: int = 7) -> bool:
                 "symbol": ticker,
                 "token": _token(),
             },
-            timeout=_TIMEOUT,
         )
         items = resp.json().get("earningsCalendar", [])
         return len(items) > 0

@@ -15,11 +15,14 @@ Railway Cron (EST): 30 18 * * 1-5  (13:30 ET)
 """
 
 import sys
+import time
 import json
 import asyncio
 import traceback
 from datetime import date, datetime, timedelta
 from typing import List
+
+import httpx
 
 from sqlalchemy.orm import Session
 
@@ -197,12 +200,30 @@ async def run_pre_fetch(target_date: date) -> None:
         db.close()
 
 
+def _wait_for_network(max_retries: int = 5, delay: int = 3) -> bool:
+    """Block until outbound HTTPS is reachable (cold-start network init)."""
+    for i in range(max_retries):
+        try:
+            httpx.get("https://finnhub.io", timeout=5)
+            print("[NET] Network ready")
+            return True
+        except Exception as e:
+            print(f"[NET] Waiting for network... attempt {i + 1}/{max_retries}: {e}")
+            time.sleep(delay)
+    return False
+
+
 async def main() -> None:
     target = date.today()
     if len(sys.argv) > 1:
         target = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
 
     print(f"=== Pre-Fetch Pipeline Start: {target} ===")
+
+    if not _wait_for_network():
+        print("[FATAL] Network unavailable after retries, aborting")
+        sys.exit(1)
+
     init_db()
 
     try:
