@@ -6,6 +6,7 @@ ORM Models
 - DailyNewsDigest:    Structured macro/micro summary stored after each pipeline run
 - DecisionLog:        Full decision audit trail for post-hoc analysis
 - TickerNewsLibrary:  Pre-fetched per-ticker news with LLM summaries and sentiment
+- SectorNewsLibrary:  Aggregated sector-level summaries from constituent ticker news
 """
 
 import datetime
@@ -119,7 +120,8 @@ class DecisionLog(Base):
 class TickerNewsLibrary(Base):
     """Pre-fetched per-ticker news with LLM-generated summaries.
 
-    Populated by pre_fetch_pipeline.py at 13:30 ET for all top_candidates.
+    Populated by pre_fetch_pipeline.py at 13:30 ET for all holdings,
+    QC candidates, and ETF_TOP5 constituents.
     Read by cron_pipeline.py at 14:00 ET — no real-time API calls needed.
     """
     __tablename__ = "ticker_news_library"
@@ -131,6 +133,7 @@ class TickerNewsLibrary(Base):
     source = Column(String(100), nullable=True)
     llm_summary = Column(Text, nullable=True)
     sentiment = Column(String(10), nullable=True)
+    relevance = Column(String(15), nullable=True)
     is_hard_event = Column(Boolean, default=False)
 
     created_at = Column(
@@ -144,3 +147,34 @@ class TickerNewsLibrary(Base):
 
     def __repr__(self) -> str:
         return f"<TickerNews {self.ticker} {self.date} hard={self.is_hard_event}>"
+
+
+class SectorNewsLibrary(Base):
+    """Aggregated sector-level summaries derived from constituent ticker news.
+
+    Each row is one sector ETF's daily outlook, synthesized from the
+    individual ticker news of its top-5 holdings.
+    """
+    __tablename__ = "sector_news_library"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    sector = Column(String(10), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    sector_summary = Column(Text, nullable=True)
+    sentiment = Column(String(10), nullable=True)
+    outlook = Column(String(10), nullable=True)
+    key_themes = Column(JSONB, nullable=True)
+    contributing_tickers = Column(JSONB, nullable=True)
+    news_count = Column(Integer, nullable=True)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sector", "date", name="uq_sector_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SectorNews {self.sector} {self.date} outlook={self.outlook}>"

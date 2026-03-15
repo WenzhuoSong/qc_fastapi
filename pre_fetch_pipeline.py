@@ -2,13 +2,21 @@
 Pre-Fetch Pipeline — 13:30 ET News Collection + LLM Batch Summarization
 
 Runs as a separate Railway Cron Job 30 minutes before the main pipeline.
-Fetches company news for all top_candidates and current holdings,
-summarizes them with a single LLM call per ticker batch, and stores
-the results in ticker_news_library for the 14:00 pipeline to consume.
+
+Two-layer output:
+  1. ticker_news_library  — per-ticker headlines with summary, sentiment,
+                            relevance, and hard-event flag
+  2. sector_news_library  — per-ETF sector outlook synthesized from
+                            constituent ticker news
+
+Data sources merged:
+  - QC current holdings + top_candidates (from POST /holdings)
+  - ETF_TOP5 constituents (55 tickers across 11 sectors)
 
 Usage:
     python pre_fetch_pipeline.py            # run for today
     python pre_fetch_pipeline.py 2026-03-14 # run for a specific date
+    python pre_fetch_pipeline.py --force    # clear and re-run
 
 Railway Cron (EDT): 30 17 * * 1-5  (13:30 ET)
 Railway Cron (EST): 30 18 * * 1-5  (13:30 ET)
@@ -27,18 +35,23 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.constants import ETF_TOP5, ALL_SECTOR_TICKERS, TICKER_TO_ETFS
 from app.db.database import SessionLocal, init_db
-from app.db.models import DailyHoldings, TickerNewsLibrary
+from app.db.models import DailyHoldings, TickerNewsLibrary, SectorNewsLibrary
 from app.pipeline.data_fetcher import fetch_ticker_news
 
 BATCH_SIZE = 10
 PRE_FETCH_TIMEOUT = 600  # 10 minutes
 
+# ═══════════════════════════════════════════════════════════════
+# Pydantic models for Structured Outputs
+# ═══════════════════════════════════════════════════════════════
 
 class NewsAnalysis(BaseModel):
     index: int = Field(description="1-based index matching the input headline")
-    summary: str = Field(description="One sentence summary, max 30 words")
+    summary: str = Field(description="Impact on this ticker in one sentence, max 30 words")
     sentiment: Literal["positive", "negative", "neutral"]
+    relevance: Literal["direct", "indirect", "not_relevant"]
     is_hard_event: bool
 
 
@@ -46,9 +59,27 @@ class BatchAnalysisResponse(BaseModel):
     results: List[NewsAnalysis]
 
 
+class SectorSummary(BaseModel):
+    sector_sentiment: Literal["positive", "negative", "neutral"]
+    outlook: Literal["bullish", "bearish", "neutral"]
+    summary: str = Field(description="2-3 sentence sector outlook, max 60 words")
+    key_themes: List[str] = Field(description="3-5 key themes driving this sector")
+
+
+# ═══════════════════════════════════════════════════════════════
+# System prompts
+# ═══════════════════════════════════════════════════════════════
+
 _SUMMARIZE_SYSTEM = (
     "You are a quantitative financial news analyst. Be concise and accurate.\n\n"
-    "CRITICAL — is_hard_event classification rules:\n"
+    "RELEVANCE RULE:\n"
+    "  direct       → headline is directly about this company itself\n"
+    "  indirect     → industry trend that affects this company and peers\n"
+    "  not_relevant → headline has nothing to do with this company\n\n"
+    "SENTIMENT RULE:\n"
+    "  sentiment is the IMPACT on this ticker, NOT the tone of the headline.\n"
+    "  Example: 'Competitor loses major contract' → sentiment=positive for this ticker.\n\n"
+    "HARD EVENT RULE:\n"
     "is_hard_event = true ONLY for NEGATIVE, BINARY-OUTCOME events with UNHEDGEABLE RISK:\n"
     "  - Earnings miss / revenue shortfall / guidance cut\n"
     "  - FDA rejection / clinical trial failure\n"
@@ -66,24 +97,38 @@ _SUMMARIZE_SYSTEM = (
     "When in doubt, set is_hard_event = false."
 )
 
+_SECTOR_SYSTEM = (
+    "You are a senior sector strategist. Given recent news from multiple "
+    "companies in a sector ETF, synthesize a concise sector outlook.\n"
+    "Focus on the NET effect of all news combined — is the sector getting "
+    "stronger or weaker? What are the dominant themes?"
+)
+
+# ═══════════════════════════════════════════════════════════════
+# Text sanitization
+# ═══════════════════════════════════════════════════════════════
+
 _CTRL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _sanitize(text: str) -> str:
-    """Remove control characters and excessive whitespace that break JSON serialization."""
+    """Remove control characters and excessive whitespace."""
     text = _CTRL_CHARS.sub("", text)
     text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     return text.strip()
 
+
+# ═══════════════════════════════════════════════════════════════
+# Ticker-level: batch headline summarization
+# ═══════════════════════════════════════════════════════════════
 
 async def summarize_headlines_batch(
     ticker: str, news_items: List[dict]
 ) -> List[dict]:
     """Batch-summarize headlines for a single ticker with one LLM call.
 
-    Uses OpenAI Structured Outputs to guarantee valid JSON — no manual parsing.
-    Returns a list of {summary, sentiment, is_hard_event} dicts,
-    one per input headline (in order).
+    Uses OpenAI Structured Outputs to guarantee valid JSON.
+    Returns a list of {summary, sentiment, relevance, is_hard_event} dicts.
     """
     if not news_items:
         return []
@@ -93,6 +138,7 @@ async def summarize_headlines_batch(
             {
                 "summary": item.get("headline", "")[:80],
                 "sentiment": "neutral",
+                "relevance": "direct",
                 "is_hard_event": False,
             }
             for item in news_items
@@ -128,12 +174,14 @@ async def summarize_headlines_batch(
                 results.append({
                     "summary": matched.summary[:200],
                     "sentiment": matched.sentiment,
+                    "relevance": matched.relevance,
                     "is_hard_event": matched.is_hard_event,
                 })
             else:
                 results.append({
                     "summary": item.get("headline", "")[:80],
                     "sentiment": "neutral",
+                    "relevance": "direct",
                     "is_hard_event": False,
                 })
         return results
@@ -144,17 +192,90 @@ async def summarize_headlines_batch(
             {
                 "summary": it.get("headline", "")[:80],
                 "sentiment": "neutral",
+                "relevance": "direct",
                 "is_hard_event": False,
             }
             for it in news_items
         ]
 
 
-async def process_ticker(db: Session, ticker: str, target_date: date) -> int:
-    """Fetch news for one ticker, summarize, and store. Returns count of new rows."""
+# ═══════════════════════════════════════════════════════════════
+# Sector-level: synthesize sector outlook from ticker news
+# ═══════════════════════════════════════════════════════════════
+
+async def summarize_sector_news(
+    etf: str, news_list: List[dict]
+) -> dict:
+    """Synthesize a sector outlook from aggregated ticker news.
+
+    news_list items have keys: ticker, summary, sentiment, relevance.
+    Returns {sector_sentiment, outlook, summary, key_themes}.
+    """
+    if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-test"):
+        return {
+            "sector_sentiment": "neutral",
+            "outlook": "neutral",
+            "summary": f"Mock sector summary for {etf}",
+            "key_themes": ["mock"],
+        }
+
+    news_block = "\n".join(
+        f"- [{item['ticker']}] ({item['sentiment']}) {item['summary']}"
+        for item in news_list[:30]
+    )
+
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+    try:
+        response = await client.beta.chat.completions.parse(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _SECTOR_SYSTEM},
+                {"role": "user", "content": (
+                    f"Sector ETF: {etf}\n"
+                    f"Top-5 constituents: {', '.join(ETF_TOP5.get(etf, []))}\n"
+                    f"Recent news ({len(news_list)} items):\n{news_block}"
+                )},
+            ],
+            temperature=0.0,
+            max_tokens=500,
+            response_format=SectorSummary,
+        )
+
+        parsed = response.choices[0].message.parsed
+        return {
+            "sector_sentiment": parsed.sector_sentiment,
+            "outlook": parsed.outlook,
+            "summary": parsed.summary[:300],
+            "key_themes": parsed.key_themes[:5],
+        }
+
+    except Exception as e:
+        print(f"[LLM] summarize_sector_news error for {etf}: {e}")
+        return {
+            "sector_sentiment": "neutral",
+            "outlook": "neutral",
+            "summary": f"Sector summary unavailable for {etf}",
+            "key_themes": [],
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Per-ticker processing
+# ═══════════════════════════════════════════════════════════════
+
+async def process_ticker(
+    db: Session, ticker: str, target_date: date
+) -> tuple[int, List[dict]]:
+    """Fetch news for one ticker, summarize, and store.
+
+    Returns (count_of_new_rows, list_of_relevant_summaries_for_sector_pool).
+    """
     news_items = fetch_ticker_news(ticker, days_back=2, limit=BATCH_SIZE)
     if not news_items:
-        return 0
+        return 0, []
 
     new_headlines = []
     for item in news_items:
@@ -169,11 +290,12 @@ async def process_ticker(db: Session, ticker: str, target_date: date) -> int:
             new_headlines.append(item)
 
     if not new_headlines:
-        return 0
+        return 0, []
 
     summaries = await summarize_headlines_batch(ticker, new_headlines)
 
     count = 0
+    relevant_for_sector = []
     for item, summary_data in zip(new_headlines, summaries):
         try:
             db.add(TickerNewsLibrary(
@@ -183,55 +305,118 @@ async def process_ticker(db: Session, ticker: str, target_date: date) -> int:
                 source=item.get("source", ""),
                 llm_summary=summary_data.get("summary", ""),
                 sentiment=summary_data.get("sentiment", "neutral"),
+                relevance=summary_data.get("relevance", "direct"),
                 is_hard_event=summary_data.get("is_hard_event", False),
             ))
             db.flush()
             count += 1
+
+            if summary_data.get("relevance") != "not_relevant":
+                relevant_for_sector.append({
+                    "ticker": ticker,
+                    "summary": summary_data.get("summary", ""),
+                    "sentiment": summary_data.get("sentiment", "neutral"),
+                    "relevance": summary_data.get("relevance", "direct"),
+                })
         except Exception:
             db.rollback()
 
     db.commit()
-    return count
+    return count, relevant_for_sector
 
+
+# ═══════════════════════════════════════════════════════════════
+# Main pipeline
+# ═══════════════════════════════════════════════════════════════
 
 async def run_pre_fetch(target_date: date, force: bool = False) -> None:
-    """Main pre-fetch logic: collect all tickers, fetch news, summarize."""
+    """Main pre-fetch logic: collect all tickers, fetch + summarize, aggregate sectors."""
     db: Session = SessionLocal()
 
     try:
+        # ── Force cleanup ──
         if force:
-            deleted = (
+            del_ticker = (
                 db.query(TickerNewsLibrary)
                 .filter(TickerNewsLibrary.date == target_date)
                 .delete()
             )
+            del_sector = (
+                db.query(SectorNewsLibrary)
+                .filter(SectorNewsLibrary.date == target_date)
+                .delete()
+            )
             db.commit()
-            print(f"[{target_date}] Force mode: cleared {deleted} existing articles")
+            print(f"[{target_date}] Force mode: cleared {del_ticker} ticker articles, {del_sector} sector summaries")
 
+        # ── Merge data sources ──
         holdings = db.query(DailyHoldings).filter_by(date=target_date).first()
-        if not holdings:
-            print(f"[{target_date}] No holdings record, skipping pre-fetch")
-            return
+        qc_tickers: set[str] = set()
+        if holdings:
+            qc_tickers = set(holdings.tickers or [])
+            if holdings.payload and holdings.payload.get("top_candidates"):
+                qc_tickers |= set(holdings.payload["top_candidates"])
+        else:
+            print(f"[{target_date}] No holdings record — using ETF_TOP5 only")
 
-        current = set(holdings.tickers or [])
-        candidates = set()
-        if holdings.payload and holdings.payload.get("top_candidates"):
-            candidates = set(holdings.payload["top_candidates"])
-
-        all_tickers = sorted(current | candidates)
+        all_tickers = sorted(qc_tickers | set(ALL_SECTOR_TICKERS))
         print(f"[{target_date}] Pre-fetch targets: {len(all_tickers)} tickers")
-        print(f"[{target_date}]   Holdings: {sorted(current)}")
-        print(f"[{target_date}]   Candidates: {sorted(candidates - current)}")
+        print(f"[{target_date}]   QC tickers: {len(qc_tickers)}")
+        print(f"[{target_date}]   ETF_TOP5 constituents: {len(ALL_SECTOR_TICKERS)}")
 
+        # ── Phase 1: Ticker-level fetch + summarize ──
+        sector_news_pool: dict[str, List[dict]] = {etf: [] for etf in ETF_TOP5}
         total_new = 0
+
         for ticker in all_tickers:
-            count = await process_ticker(db, ticker, target_date)
+            count, relevant = await process_ticker(db, ticker, target_date)
             if count > 0:
                 print(f"[{target_date}]   {ticker}: {count} new articles stored")
             total_new += count
-            await asyncio.sleep(0.3)
 
-        print(f"[{target_date}] Pre-fetch complete: {total_new} new articles across {len(all_tickers)} tickers")
+            for etf in TICKER_TO_ETFS.get(ticker, []):
+                sector_news_pool[etf].extend(relevant)
+
+            await asyncio.sleep(1)
+
+        print(f"[{target_date}] Phase 1 complete: {total_new} new articles across {len(all_tickers)} tickers")
+
+        # ── Phase 2: Sector-level aggregation ──
+        sector_count = 0
+        for etf, news_list in sector_news_pool.items():
+            if not news_list:
+                print(f"[{target_date}]   {etf}: no relevant news, skipping sector summary")
+                continue
+
+            summary = await summarize_sector_news(etf, news_list)
+            contributing = sorted(set(n["ticker"] for n in news_list))
+
+            existing = db.query(SectorNewsLibrary).filter_by(
+                sector=etf, date=target_date
+            ).first()
+            if existing:
+                existing.sector_summary = summary["summary"]
+                existing.sentiment = summary["sector_sentiment"]
+                existing.outlook = summary["outlook"]
+                existing.key_themes = summary["key_themes"]
+                existing.contributing_tickers = contributing
+                existing.news_count = len(news_list)
+            else:
+                db.add(SectorNewsLibrary(
+                    sector=etf,
+                    date=target_date,
+                    sector_summary=summary["summary"],
+                    sentiment=summary["sector_sentiment"],
+                    outlook=summary["outlook"],
+                    key_themes=summary["key_themes"],
+                    contributing_tickers=contributing,
+                    news_count=len(news_list),
+                ))
+            db.commit()
+            sector_count += 1
+            print(f"[{target_date}]   {etf}: {summary['outlook']} ({len(news_list)} items from {contributing})")
+
+        print(f"[{target_date}] Phase 2 complete: {sector_count} sector summaries generated")
 
     except Exception as e:
         print(f"[{target_date}] Pre-fetch error: {traceback.format_exc()}")
@@ -240,6 +425,10 @@ async def run_pre_fetch(target_date: date, force: bool = False) -> None:
     finally:
         db.close()
 
+
+# ═══════════════════════════════════════════════════════════════
+# Entry point
+# ═══════════════════════════════════════════════════════════════
 
 def _wait_for_network(max_retries: int = 10, delay: int = 5) -> bool:
     """Block until outbound HTTPS is reachable (cold-start network init)."""

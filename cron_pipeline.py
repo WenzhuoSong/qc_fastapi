@@ -51,6 +51,7 @@ from app.pipeline.step1_macro import (
 from app.pipeline.step2_micro import (
     run_micro_scoring,
     build_news_context_from_db,
+    build_sector_context_from_db,
     build_hard_flags_from_db,
 )
 from app.pipeline.step3_risk import run_risk_audit
@@ -243,11 +244,15 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                         all_tickers.append(c)
 
             news_digest_str = "(No news data available)"
+            sector_context_str = "(No sector data available)"
             earnings_flags: dict = {}
 
             if all_tickers:
                 print(f"[{target_date}]   Reading pre-fetched news from DB for {len(all_tickers)} tickers...")
                 news_digest_str = build_news_context_from_db(db, all_tickers, target_date)
+
+                print(f"[{target_date}]   Reading sector outlooks from DB...")
+                sector_context_str = build_sector_context_from_db(db, target_date)
 
                 hard_flags = build_hard_flags_from_db(db, all_tickers, target_date)
                 if hard_flags:
@@ -265,6 +270,7 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                 macro_context_str,
                 holdings=tickers,
                 news_digest=news_digest_str,
+                sector_context=sector_context_str,
                 earnings_flags=earnings_flags,
             )
             row.step2_micro_result = result

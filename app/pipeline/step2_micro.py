@@ -1,25 +1,29 @@
 """
-Step 2 — Micro Sector Scoring (with Holdings + Pre-Fetched News + Earnings)
+Step 2 — Micro Sector Scoring (with Holdings + Dual-Layer News + Earnings)
 
 Takes the macro thesis from Step 1, current holdings from QC,
-pre-fetched news summaries from ticker_news_library, and earnings
+pre-fetched dual-layer news (ticker + sector), and earnings
 flags to produce grounded ETF scores.
 """
 
 import asyncio
 from datetime import date, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.constants import ETF_TOP5
 from app.pipeline.prompts import MICRO_SYSTEM, MICRO_USER
 
 
 def build_news_context_from_db(
     db: Session, tickers: List[str], target_date: date
 ) -> str:
-    """Read pre-fetched news from ticker_news_library and format for LLM."""
+    """Read pre-fetched news from ticker_news_library and format for LLM.
+
+    Filters out not_relevant items and tags relevance level.
+    """
     from app.db.models import TickerNewsLibrary
 
     cutoff = target_date - timedelta(days=2)
@@ -41,12 +45,22 @@ def build_news_context_from_db(
             parts.append(f"**{ticker}**: No recent news")
             continue
 
-        hard_events = [r for r in rows if r.is_hard_event]
+        relevant_rows = [r for r in rows if r.relevance != "not_relevant"]
+        if not relevant_rows:
+            parts.append(f"**{ticker}**: No relevant news")
+            continue
+
+        hard_events = [r for r in relevant_rows if r.is_hard_event]
         lines = []
-        for r in rows:
-            sentiment_tag = f"[{r.sentiment}]" if r.sentiment else ""
+        for r in relevant_rows:
+            tags = []
+            if r.sentiment:
+                tags.append(r.sentiment)
+            if r.relevance and r.relevance != "direct":
+                tags.append(r.relevance)
+            tag_str = f"[{', '.join(tags)}]" if tags else ""
             summary = r.llm_summary or r.headline[:80]
-            lines.append(f"  - {sentiment_tag} {summary}")
+            lines.append(f"  - {tag_str} {summary}")
 
         block = f"**{ticker}**:\n" + "\n".join(lines)
         if hard_events:
@@ -54,6 +68,31 @@ def build_news_context_from_db(
         parts.append(block)
 
     return "\n\n".join(parts) if parts else "(No news data available)"
+
+
+def build_sector_context_from_db(db: Session, target_date: date) -> str:
+    """Read sector_news_library and format sector outlooks for LLM."""
+    from app.db.models import SectorNewsLibrary
+
+    parts = []
+    for etf in ETF_TOP5:
+        row = db.query(SectorNewsLibrary).filter_by(
+            sector=etf, date=target_date
+        ).first()
+
+        if not row:
+            parts.append(f"**{etf}**: No sector data")
+            continue
+
+        themes = ", ".join(row.key_themes) if row.key_themes else "N/A"
+        tickers = ", ".join(row.contributing_tickers) if row.contributing_tickers else "N/A"
+        parts.append(
+            f"**{etf}** [{row.outlook}] ({row.sentiment}): "
+            f"{row.sector_summary}\n"
+            f"  Themes: {themes} | Sources: {tickers} ({row.news_count} items)"
+        )
+
+    return "\n\n".join(parts) if parts else "(No sector data available)"
 
 
 def build_hard_flags_from_db(
@@ -101,14 +140,21 @@ async def run_micro_scoring(
     macro_context: str,
     holdings: List[str] | None = None,
     news_digest: str = "(No news data available)",
+    sector_context: str = "(No sector data available)",
     earnings_flags: Dict[str, bool] | None = None,
 ) -> str:
-    """Score sector ETFs given macro backdrop, holdings, news, and earnings.
+    """Score sector ETFs given macro backdrop, holdings, dual-layer news, and earnings.
 
-    news_digest is a pre-built string from build_news_context_from_db().
+    news_digest: per-ticker news from build_news_context_from_db()
+    sector_context: per-ETF outlook from build_sector_context_from_db()
     """
     holdings_str = ", ".join(holdings) if holdings else "(no holdings reported)"
     earnings_str = _format_earnings_flags(earnings_flags or {})
+
+    combined_news = (
+        f"### Sector Outlook (from pre-fetch)\n{sector_context}\n\n"
+        f"### Individual Ticker News\n{news_digest}"
+    )
 
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-test"):
         await asyncio.sleep(1)
@@ -130,7 +176,7 @@ async def run_micro_scoring(
                 date=target_date,
                 macro_context=macro_context,
                 holdings=holdings_str,
-                news_digest=news_digest,
+                news_digest=combined_news,
                 earnings_flags=earnings_str,
             )},
         ],
