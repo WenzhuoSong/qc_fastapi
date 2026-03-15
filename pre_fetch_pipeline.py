@@ -191,11 +191,20 @@ async def process_ticker(db: Session, ticker: str, target_date: date) -> int:
     return count
 
 
-async def run_pre_fetch(target_date: date) -> None:
+async def run_pre_fetch(target_date: date, force: bool = False) -> None:
     """Main pre-fetch logic: collect all tickers, fetch news, summarize."""
     db: Session = SessionLocal()
 
     try:
+        if force:
+            deleted = (
+                db.query(TickerNewsLibrary)
+                .filter(TickerNewsLibrary.date == target_date)
+                .delete()
+            )
+            db.commit()
+            print(f"[{target_date}] Force mode: cleared {deleted} existing articles")
+
         holdings = db.query(DailyHoldings).filter_by(date=target_date).first()
         if not holdings:
             print(f"[{target_date}] No holdings record, skipping pre-fetch")
@@ -244,11 +253,13 @@ def _wait_for_network(max_retries: int = 10, delay: int = 5) -> bool:
 
 
 async def main() -> None:
+    force = "--force" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--force"]
     target = date.today()
-    if len(sys.argv) > 1:
-        target = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
+    if args:
+        target = datetime.strptime(args[0], "%Y-%m-%d").date()
 
-    print(f"=== Pre-Fetch Pipeline Start: {target} ===")
+    print(f"=== Pre-Fetch Pipeline Start: {target} {'(FORCE)' if force else ''} ===")
 
     if not _wait_for_network():
         print("[FATAL] Network unavailable after retries, aborting")
@@ -257,7 +268,7 @@ async def main() -> None:
     init_db()
 
     try:
-        await asyncio.wait_for(run_pre_fetch(target), timeout=PRE_FETCH_TIMEOUT)
+        await asyncio.wait_for(run_pre_fetch(target, force=force), timeout=PRE_FETCH_TIMEOUT)
         print(f"=== Pre-Fetch Pipeline Success: {target} ===")
     except asyncio.TimeoutError:
         print(f"[FATAL] Pre-fetch TIMEOUT after {PRE_FETCH_TIMEOUT}s")

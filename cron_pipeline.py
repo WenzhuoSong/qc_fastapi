@@ -138,7 +138,7 @@ def _compute_defense_level(effective_regime: str) -> str:
 # Main pipeline
 # ═══════════════════════════════════════════════════════════════
 
-async def run_pipeline(target_date: date) -> None:
+async def run_pipeline(target_date: date, force: bool = False) -> None:
     """Execute the full 4-step pipeline with checkpoint resume."""
     db: Session = SessionLocal()
     macro_parsed: Dict[str, Any] = {}
@@ -150,9 +150,19 @@ async def run_pipeline(target_date: date) -> None:
             db.add(row)
             db.commit()
 
-        if row.status == "READY":
-            print(f"[{target_date}] Already READY, skipping.")
+        if row.status == "READY" and not force:
+            print(f"[{target_date}] Already READY, skipping. (use --force to re-run)")
             return
+
+        if force and row.status == "READY":
+            print(f"[{target_date}] Force re-run: resetting READY → INIT")
+            row.status = "INIT"
+            row.step1_macro_result = None
+            row.step2_micro_result = None
+            row.step3_risk_result = None
+            row.final_weights = None
+            row.error_log = None
+            db.commit()
 
         # ── Step 1: Macro Analysis (with real news + calendar + history) ──
         if row.status in ("INIT", "ERROR"):
@@ -382,11 +392,13 @@ def _wait_for_network(max_retries: int = 10, delay: int = 5) -> bool:
 
 async def main() -> None:
     """Entry point with global timeout and Telegram alerting."""
+    force = "--force" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--force"]
     target = date.today()
-    if len(sys.argv) > 1:
-        target = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
+    if args:
+        target = datetime.strptime(args[0], "%Y-%m-%d").date()
 
-    print(f"=== Cron Pipeline Start: {target} ===")
+    print(f"=== Cron Pipeline Start: {target} {'(FORCE)' if force else ''} ===")
 
     net_ok = _wait_for_network()
     if not net_ok:
@@ -395,7 +407,7 @@ async def main() -> None:
     init_db()
 
     try:
-        await asyncio.wait_for(run_pipeline(target), timeout=PIPELINE_TIMEOUT)
+        await asyncio.wait_for(run_pipeline(target, force=force), timeout=PIPELINE_TIMEOUT)
         print(f"=== Cron Pipeline Success: {target} ===")
     except asyncio.TimeoutError:
         msg = f"Pipeline TIMEOUT after {PIPELINE_TIMEOUT}s for {target}"
