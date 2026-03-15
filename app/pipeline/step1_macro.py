@@ -1,106 +1,71 @@
 """
-Step 1 — Macro Regime Analysis (Structured JSON Output)
+Step 1 — Macro Regime Analysis (Structured Outputs)
 
-Calls LLM with real market news, economic calendar, and 5-day history
-to produce a structured macro assessment. Returns a dict with parsed
-fields for downstream consumption and database persistence.
+Calls LLM with real market news, economic calendar, and 5-day history.
+Uses OpenAI Structured Outputs to guarantee valid typed output — no
+manual JSON parsing. Returns a Step1Output Pydantic object.
 """
 
 import asyncio
-import json
 from datetime import date
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Literal
+
+from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.pipeline.prompts import MACRO_SYSTEM, MACRO_USER
+from app.pipeline.prompts import STEP1_SYSTEM
 
 
-MACRO_DEFAULTS: Dict[str, Any] = {
-    "regime": "Neutral",
-    "confidence": 50,
-    "summary": "",
-    "key_events": [],
-    "sector_thesis": "",
-    "reasoning": "",
-    "raw_text": "",
-}
+class Step1Output(BaseModel):
+    regime: Literal["Risk-On", "Neutral", "Risk-Off"]
+    confidence: int = Field(ge=0, le=100)
+    summary: str = Field(description="One sentence macro summary, 10-30 words")
+    key_events: List[str] = Field(description="3-5 specific factual events from today's news")
+    reasoning: str = Field(description="2-3 sentences explaining why this regime was chosen")
 
 
 def _format_news(articles: List[dict]) -> str:
     if not articles:
         return "(No macro news available)"
-    lines = []
-    for a in articles[:15]:
-        headline = a.get("headline", "")
-        summary = a.get("summary", "")
-        source = a.get("source", "")
-        lines.append(f"- [{source}] {headline}")
-        if summary:
-            lines.append(f"  {summary[:200]}")
-    return "\n".join(lines)
+    return "\n".join(
+        f"- {a.get('headline', '')}"
+        for a in articles[:20]
+    )
 
 
 def _format_calendar(events: List[dict]) -> str:
     if not events:
-        return "(No high-impact events in the next 3 days)"
-    lines = []
-    for e in events:
-        event_name = e.get("event", "Unknown")
-        country = e.get("country", "")
-        impact = e.get("impact", "")
-        lines.append(f"- [{country}] {event_name} (impact: {impact})")
-    return "\n".join(lines)
+        return "No high-impact events today"
+    return "\n".join(
+        f"- {e.get('event', 'Unknown')} (impact: {e.get('impact', '')})"
+        for e in events[:5]
+    )
 
 
-def parse_macro_output(raw_text: str) -> Dict[str, Any]:
-    """Extract structured JSON from Step 1 LLM output.
-
-    Returns a dict with all expected keys, using defaults for any
-    fields that couldn't be parsed.
-    """
-    result = {**MACRO_DEFAULTS, "raw_text": raw_text}
-
-    i = raw_text.find("{")
-    if i == -1:
-        return result
-
-    depth = 0
-    for j in range(i, len(raw_text)):
-        if raw_text[j] == "{":
-            depth += 1
-        elif raw_text[j] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    parsed = json.loads(raw_text[i:j + 1])
-                    if isinstance(parsed, dict) and "regime" in parsed:
-                        for key in MACRO_DEFAULTS:
-                            if key != "raw_text" and key in parsed:
-                                result[key] = parsed[key]
-                        summary = str(result.get("summary", "")).strip()
-                        if not summary:
-                            events = result.get("key_events", [])
-                            events_str = ", ".join(str(e) for e in events) if events else "N/A"
-                            reasoning = str(result.get("reasoning", "")).strip()
-                            result["summary"] = (
-                                f"Regime: {result.get('regime')}. "
-                                f"Key events: {events_str}. "
-                                f"{reasoning[:150]}"
-                            ).strip()
-                        return result
-                except json.JSONDecodeError:
-                    pass
-                break
-
-    return result
+def _build_user_message(
+    macro_news: List[dict],
+    econ_calendar: List[dict],
+    history_block: str,
+) -> str:
+    return (
+        f"=== TODAY'S MACRO NEWS ===\n"
+        f"{_format_news(macro_news)}\n\n"
+        f"=== ECONOMIC CALENDAR ===\n"
+        f"{_format_calendar(econ_calendar)}\n\n"
+        f"=== RECENT 5-DAY CONTEXT ===\n"
+        f"{history_block or 'No historical context available'}\n\n"
+        f"Assess the current market regime."
+    )
 
 
 def format_macro_context(parsed: Dict[str, Any]) -> str:
-    """Format the parsed Step 1 output into a readable string for Step 2/3."""
+    """Format Step 1 output into a readable string for Step 2/3 consumption.
+
+    Accepts either a Step1Output dict or a raw dict from checkpoint resume.
+    """
     regime = parsed.get("regime", "Unknown")
     confidence = parsed.get("confidence", "?")
     summary = parsed.get("summary", "")
-    thesis = parsed.get("sector_thesis", "")
     reasoning = parsed.get("reasoning", "")
     events = parsed.get("key_events", [])
 
@@ -110,8 +75,6 @@ def format_macro_context(parsed: Dict[str, Any]) -> str:
     ]
     if events:
         lines.append(f"Key Events: {', '.join(str(e) for e in events)}")
-    if thesis:
-        lines.append(f"Sector Thesis: {thesis}")
     if reasoning:
         lines.append(f"Reasoning: {reasoning}")
 
@@ -123,44 +86,44 @@ async def run_macro_analysis(
     macro_news: List[dict] | None = None,
     econ_calendar: List[dict] | None = None,
     history_block: str = "",
-) -> Dict[str, Any]:
+) -> Step1Output:
     """Return a structured macro analysis grounded in real data.
 
-    Returns a dict with keys: regime, confidence, summary, key_events,
-    sector_thesis, reasoning, raw_text.
+    Returns a Step1Output Pydantic object with guaranteed valid fields.
     """
-    news_str = _format_news(macro_news or [])
-    cal_str = _format_calendar(econ_calendar or [])
-    hist_str = history_block or "(No historical context yet — first run)"
-
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-test"):
         await asyncio.sleep(1)
-        return {
-            "regime": "Risk-On",
-            "confidence": 70,
-            "summary": f"Mock macro analysis for {target_date}",
-            "key_events": ["Mock CPI data", "Mock Fed meeting"],
-            "sector_thesis": "Overweight Technology, underweight Utilities",
-            "reasoning": "Mock mode: no real API key configured.",
-            "raw_text": f"[MOCK] Macro analysis for {target_date}",
-        }
+        return Step1Output(
+            regime="Risk-On",
+            confidence=70,
+            summary=f"Mock macro analysis for {target_date}",
+            key_events=["Mock CPI data", "Mock Fed meeting"],
+            reasoning="Mock mode: no real API key configured.",
+        )
+
+    user_msg = _build_user_message(
+        macro_news or [],
+        econ_calendar or [],
+        history_block,
+    )
 
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    response = await client.chat.completions.create(
+    response = await client.beta.chat.completions.parse(
         model=settings.OPENAI_MODEL,
         messages=[
-            {"role": "system", "content": MACRO_SYSTEM},
-            {"role": "user", "content": MACRO_USER.format(
-                date=target_date,
-                macro_news=news_str,
-                econ_calendar=cal_str,
-                history_block=hist_str,
-            )},
+            {"role": "system", "content": STEP1_SYSTEM},
+            {"role": "user", "content": user_msg},
         ],
-        temperature=0.3,
-        max_tokens=1000,
+        temperature=0.0,
+        max_tokens=800,
+        response_format=Step1Output,
     )
-    raw_text = response.choices[0].message.content or ""
-    return parse_macro_output(raw_text)
+
+    result = response.choices[0].message.parsed
+
+    if not result.summary and result.key_events:
+        result.summary = f"{result.regime}: {', '.join(result.key_events[:2])}"
+
+    return result

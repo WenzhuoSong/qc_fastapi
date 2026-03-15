@@ -45,8 +45,8 @@ from app.pipeline.data_fetcher import (
 )
 from app.pipeline.step1_macro import (
     run_macro_analysis,
-    parse_macro_output,
     format_macro_context,
+    Step1Output,
 )
 from app.pipeline.step2_micro import (
     run_micro_scoring,
@@ -189,12 +189,13 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
             history_block = _build_history_block(db)
             print(f"[{target_date}]   History context loaded")
 
-            macro_parsed = await run_macro_analysis(
+            step1_result = await run_macro_analysis(
                 target_date,
                 macro_news=macro_news,
                 econ_calendar=econ_calendar,
                 history_block=history_block,
             )
+            macro_parsed = step1_result.model_dump()
 
             row.step1_macro_result = json.dumps(macro_parsed, ensure_ascii=False)
             row.status = "STEP1_DONE"
@@ -206,24 +207,25 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
             if not digest:
                 digest = DailyNewsDigest(date=target_date)
                 db.add(digest)
-            digest.macro_summary = macro_parsed.get("summary", "")
-            digest.macro_regime = macro_parsed.get("regime", "Neutral")
-            digest.confidence = macro_parsed.get("confidence", 50)
-            digest.key_events = macro_parsed.get("key_events", [])
-            digest.sector_thesis = macro_parsed.get("sector_thesis", "")
+            digest.macro_summary = step1_result.summary
+            digest.macro_regime = step1_result.regime
+            digest.confidence = step1_result.confidence
+            digest.key_events = step1_result.key_events
             db.commit()
 
             print(f"[{target_date}] Step 1 done.")
-            print(f"[{target_date}]   Regime: {macro_parsed.get('regime')} "
-                  f"(confidence: {macro_parsed.get('confidence')})")
-            print(f"[{target_date}]   Summary: {macro_parsed.get('summary', '')[:200]}")
+            print(f"[{target_date}]   Regime: {step1_result.regime} "
+                  f"(confidence: {step1_result.confidence})")
+            print(f"[{target_date}]   Summary: {step1_result.summary}")
+            print(f"[{target_date}]   Events: {step1_result.key_events}")
+            print(f"[{target_date}]   Reasoning: {step1_result.reasoning[:200]}")
 
         # ── Restore macro_parsed on checkpoint resume ──
         if not macro_parsed and row.step1_macro_result:
             try:
                 macro_parsed = json.loads(row.step1_macro_result)
             except json.JSONDecodeError:
-                macro_parsed = parse_macro_output(row.step1_macro_result)
+                macro_parsed = {"regime": "Neutral", "confidence": 50, "summary": "", "key_events": [], "reasoning": ""}
 
         macro_context_str = format_macro_context(macro_parsed)
 

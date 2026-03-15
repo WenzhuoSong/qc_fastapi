@@ -2,36 +2,30 @@
 Centralized Prompt Templates for the Quant Research Pipeline
 
 All LLM prompts live here so they are easy to review, version, and A/B test.
-Literal braces in JSON examples are doubled ({{ }}) to survive .format().
+Step 1 uses Structured Outputs (format enforced by API, not prompt).
+Steps 2/3 still use prompt-based JSON formatting with doubled braces ({{ }}).
 """
 
-# ── Step 1: Macro Regime Analysis (structured JSON output) ───────────
+# ── Step 1: Macro Regime Analysis (Structured Outputs) ───────────────
 
-MACRO_SYSTEM = (
-    "You are a senior macro strategist at a global hedge fund. "
-    "Analyze the current macro environment using the REAL news and "
-    "economic calendar provided. Do NOT fabricate data points — "
-    "base your analysis strictly on the evidence given."
-)
-
-MACRO_USER = (
-    "Today is {date}.\n\n"
-    "## Recent Market News (last 24 h)\n{macro_news}\n\n"
-    "## Upcoming Economic Events\n{econ_calendar}\n\n"
-    "## Recent 5-Day Market Context (for trend awareness)\n{history_block}\n\n"
-    "Based on ALL of the above (today's news, economic events, and recent "
-    "trend context), provide your analysis.\n\n"
-    "Return ONLY this JSON as your first output (no markdown fences, "
-    "replace every <...> placeholder with your actual analysis):\n"
-    '{{"regime": "<Risk-On or Risk-Off or Neutral>",'
-    ' "confidence": <integer 0-100>,'
-    ' "summary": "<REQUIRED: one-sentence macro summary, 10-30 words, MUST NOT be empty>",'
-    ' "key_events": ["<event1>", "<event2>", "<event3 — list at least 2 real events>"],'
-    ' "sector_thesis": "<which sectors to overweight/underweight and why>",'
-    ' "reasoning": "<2-3 sentences explaining why you chose this regime>"}}\n\n'
-    "IMPORTANT: summary and key_events must NOT be empty. "
-    "Cite specific news or data from the input above.\n\n"
-    "Then optionally add extra commentary below the JSON."
+STEP1_SYSTEM = (
+    "You are a macro market analyst for a quantitative trading strategy.\n\n"
+    "Assess today's market regime based on news and economic data.\n\n"
+    "REGIME DEFINITIONS:\n"
+    "- Risk-On:  Clear bull market signals, positive economic data, "
+    "risk assets outperforming, credit markets healthy\n"
+    "- Risk-Off: Bear market signals, negative shocks, "
+    "credit spreads widening, defensive assets leading\n"
+    "- Neutral:  Mixed signals, no clear directional bias\n\n"
+    "CONFIDENCE SCORING:\n"
+    "- 80-100: Strong evidence, multiple confirming signals\n"
+    "- 60-79:  Moderate evidence, some conflicting signals\n"
+    "- 40-59:  Weak evidence, highly uncertain\n"
+    "- 0-39:   Almost no directional information today\n\n"
+    "KEY EVENTS: List only SPECIFIC, FACTUAL events from today's news. "
+    "Not general observations. Each event max 15 words.\n\n"
+    "Be direct. Do not hedge excessively. "
+    "If news is sparse, confidence should be LOW (30-50), not forced high."
 )
 
 # ── Step 2: Micro Scoring (with holdings + news + earnings) ──────────
