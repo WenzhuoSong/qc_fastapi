@@ -81,10 +81,12 @@ def parse_macro_output(raw_text: str) -> Dict[str, Any]:
                         if not summary:
                             events = result.get("key_events", [])
                             events_str = ", ".join(str(e) for e in events) if events else "N/A"
+                            reasoning = str(result.get("reasoning", "")).strip()
                             result["summary"] = (
                                 f"Regime: {result.get('regime')}. "
-                                f"Key events: {events_str}"
-                            )
+                                f"Key events: {events_str}. "
+                                f"{reasoning[:150]}"
+                            ).strip()
                         return result
                 except json.JSONDecodeError:
                     pass

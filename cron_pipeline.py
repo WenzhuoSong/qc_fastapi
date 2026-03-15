@@ -294,11 +294,12 @@ async def run_pipeline(target_date: date) -> None:
 
         # ── Step 4: Format Weights + Gated Regime Override ──
         if row.status == "STEP3_DONE":
-            print(f"[{target_date}] Running Step 4: Normalize Weights...")
+            print(f"[{target_date}] Running Step 4: Normalize Weights...", flush=True)
             weights = normalize_to_weights(row.step2_micro_result, row.step3_risk_result)
             row.final_weights = weights
             row.status = "READY"
             db.commit()
+            print(f"[{target_date}] Step 4 done.")
 
             # ── Gated Regime Override ──
             holdings_row = db.query(DailyHoldings).filter_by(date=target_date).first()
@@ -339,7 +340,6 @@ async def run_pipeline(target_date: date) -> None:
                 log.reasoning += f"\nHard risk flags: {json.dumps(risk_flags_summary)}"
             db.commit()
 
-            print(f"[{target_date}] Pipeline complete!")
             print(f"[{target_date}]   QC regime: {qc_regime} | AI regime: {log.ai_regime}")
             print(f"[{target_date}]   Override: {was_overridden} → Effective: {effective_regime}")
             print(f"[{target_date}]   Defense: {defense} | Reason: {override_reason}")
@@ -347,6 +347,7 @@ async def run_pipeline(target_date: date) -> None:
                 print(f"[{target_date}]   Hard risks: {risk_flags_summary}")
             print(f"[{target_date}]   Tickers: {len(weights)}  Weights: {weights}")
             print(f"[{target_date}]   Sum: {sum(weights.values()):.4f}")
+            print(f"[{target_date}] Pipeline complete!", flush=True)
 
     except Exception as e:
         error_msg = traceback.format_exc()

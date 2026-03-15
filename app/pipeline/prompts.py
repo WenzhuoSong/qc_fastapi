@@ -25,10 +25,12 @@ MACRO_USER = (
     "replace every <...> placeholder with your actual analysis):\n"
     '{{"regime": "<Risk-On or Risk-Off or Neutral>",'
     ' "confidence": <integer 0-100>,'
-    ' "summary": "<one-sentence macro summary, max 100 words>",'
-    ' "key_events": ["<event1>", "<event2>", "<event3>"],'
+    ' "summary": "<REQUIRED: one-sentence macro summary, 10-30 words, MUST NOT be empty>",'
+    ' "key_events": ["<event1>", "<event2>", "<event3 — list at least 2 real events>"],'
     ' "sector_thesis": "<which sectors to overweight/underweight and why>",'
     ' "reasoning": "<2-3 sentences explaining why you chose this regime>"}}\n\n'
+    "IMPORTANT: summary and key_events must NOT be empty. "
+    "Cite specific news or data from the input above.\n\n"
     "Then optionally add extra commentary below the JSON."
 )
 
@@ -51,10 +53,15 @@ MICRO_USER = (
     "XLK, XLF, XLV, XLE, XLI, XLP, XLU, XLY, XLC, XLRE, XLB.\n\n"
     "Rules:\n"
     "- Higher score = stronger conviction to overweight\n"
+    "- USE THE FULL 0-10 RANGE. Do NOT cluster all scores around 5.\n"
+    "  In Risk-On: favored sectors should be 7-9, weak ones 2-4\n"
+    "  In Neutral: spread scores from 3 to 7 based on evidence\n"
+    "  In Risk-Off: defensive sectors (XLV, XLP, XLU) should be 7-9, cyclical ones 1-3\n"
     "- Incorporate news sentiment: positive catalysts raise scores, negative ones lower them\n"
     "- Factor in current holdings: avoid excessive turnover unless news warrants it\n"
     "- If a holding has an upcoming earnings event, reduce conviction on its sector "
-    "to avoid binary risk\n\n"
+    "to avoid binary risk\n"
+    "- The TOP score minus the BOTTOM score should be at least 4 points\n\n"
     "Return your scores as a JSON object as the FIRST thing in your response "
     "(no markdown fences, no preamble). Use YOUR OWN scores based on the analysis — "
     "the numbers below are just a format example, NOT a suggestion:\n"

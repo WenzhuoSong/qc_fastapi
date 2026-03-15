@@ -80,9 +80,23 @@ async def summarize_headlines_batch(
         '"sentiment": "positive|negative|neutral", '
         '"is_hard_event": true|false}\n'
         "]\n\n"
-        "is_hard_event = true ONLY for: earnings surprise, FDA decision, "
-        "trading halt, merger/acquisition, SEC investigation, major lawsuit, "
-        "bankruptcy, significant regulatory action."
+        "CRITICAL — is_hard_event classification rules:\n"
+        "  is_hard_event = true ONLY when the headline describes a NEGATIVE, "
+        "BINARY-OUTCOME event that creates UNHEDGEABLE RISK:\n"
+        "    - Earnings miss / revenue shortfall / guidance cut\n"
+        "    - FDA rejection / clinical trial failure\n"
+        "    - Trading halt / suspension\n"
+        "    - Being acquired (target of takeover, NOT the acquirer)\n"
+        "    - SEC investigation / fraud allegation / class-action lawsuit\n"
+        "    - Bankruptcy filing / debt default\n"
+        "    - Regulatory ban / sanctions\n\n"
+        "  is_hard_event = false for ALL of these:\n"
+        "    - Positive deals, partnerships, investments, contracts\n"
+        "    - Analyst upgrades/downgrades\n"
+        "    - General market commentary or sector trends\n"
+        "    - Price movements or trading volume\n"
+        "    - Product launches or expansion plans\n\n"
+        "When in doubt, set is_hard_event = false. Err on the side of caution."
     )
 
     from openai import AsyncOpenAI
