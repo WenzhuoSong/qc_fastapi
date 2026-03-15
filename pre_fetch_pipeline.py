@@ -100,8 +100,13 @@ _SUMMARIZE_SYSTEM = (
 _SECTOR_SYSTEM = (
     "You are a senior sector strategist. Given recent news from multiple "
     "companies in a sector ETF, synthesize a concise sector outlook.\n"
-    "Focus on the NET effect of all news combined — is the sector getting "
-    "stronger or weaker? What are the dominant themes?"
+    "Focus on the NET effect of all news combined.\n\n"
+    "IMPORTANT field definitions:\n"
+    "  sector_sentiment = current news tone (what just happened)\n"
+    "  outlook = forward-looking view (what will likely happen next)\n"
+    "  These CAN differ. Example: negative news today but sector is oversold "
+    "→ sentiment=negative, outlook=bullish.\n"
+    "  Only set them equal when current tone and forward view genuinely align."
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -172,7 +177,7 @@ async def summarize_headlines_batch(
             matched = next((p for p in parsed_results if p.index == i + 1), None)
             if matched:
                 results.append({
-                    "summary": matched.summary[:200],
+                    "summary": matched.summary,
                     "sentiment": matched.sentiment,
                     "relevance": matched.relevance,
                     "is_hard_event": matched.is_hard_event,
@@ -248,7 +253,7 @@ async def summarize_sector_news(
         return {
             "sector_sentiment": parsed.sector_sentiment,
             "outlook": parsed.outlook,
-            "summary": parsed.summary[:300],
+            "summary": parsed.summary,
             "key_themes": parsed.key_themes[:5],
         }
 
