@@ -14,6 +14,7 @@ Railway Cron (EDT): 30 17 * * 1-5  (13:30 ET)
 Railway Cron (EST): 30 18 * * 1-5  (13:30 ET)
 """
 
+import re
 import sys
 import time
 import json
@@ -33,6 +34,15 @@ from app.pipeline.data_fetcher import fetch_ticker_news
 
 BATCH_SIZE = 10
 PRE_FETCH_TIMEOUT = 600  # 10 minutes
+
+_CTRL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize(text: str) -> str:
+    """Remove control characters and excessive whitespace that break JSON serialization."""
+    text = _CTRL_CHARS.sub("", text)
+    text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return text.strip()[:300]
 
 
 async def summarize_headlines_batch(
@@ -57,7 +67,7 @@ async def summarize_headlines_batch(
         ]
 
     headlines_block = "\n".join(
-        f"{i + 1}. {item.get('headline', '')}"
+        f"{i + 1}. {_sanitize(item.get('headline', ''))}"
         for i, item in enumerate(news_items[:BATCH_SIZE])
     )
 
@@ -131,9 +141,10 @@ async def process_ticker(db: Session, ticker: str, target_date: date) -> int:
 
     new_headlines = []
     for item in news_items:
-        headline = item.get("headline", "").strip()
+        headline = _sanitize(item.get("headline", ""))
         if not headline:
             continue
+        item["headline"] = headline
         exists = db.query(TickerNewsLibrary).filter_by(
             ticker=ticker, headline=headline
         ).first()
