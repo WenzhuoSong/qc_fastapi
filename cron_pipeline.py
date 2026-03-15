@@ -365,14 +365,17 @@ async def run_pipeline(target_date: date) -> None:
 def _wait_for_network(max_retries: int = 10, delay: int = 5) -> bool:
     """Block until outbound HTTPS is reachable (cold-start network init)."""
     time.sleep(3)
+    targets = ["https://api.openai.com", "https://finnhub.io", "https://1.1.1.1"]
     for i in range(max_retries):
-        try:
-            httpx.get("https://finnhub.io", timeout=5)
-            print("[NET] Network ready")
-            return True
-        except Exception as e:
-            print(f"[NET] Waiting for network... attempt {i + 1}/{max_retries}: {e}")
-            time.sleep(delay)
+        for url in targets:
+            try:
+                httpx.get(url, timeout=5)
+                print(f"[NET] Network ready (via {url})")
+                return True
+            except Exception:
+                pass
+        print(f"[NET] Waiting for network... attempt {i + 1}/{max_retries}")
+        time.sleep(delay)
     return False
 
 
@@ -384,11 +387,9 @@ async def main() -> None:
 
     print(f"=== Cron Pipeline Start: {target} ===")
 
-    if not _wait_for_network():
-        msg = f"Network unavailable after retries for {target}"
-        print(f"[FATAL] {msg}")
-        await send_alert(msg)
-        sys.exit(1)
+    net_ok = _wait_for_network()
+    if not net_ok:
+        print("[WARN] Network unreachable — proceeding with DB-only data, LLM calls may fail")
 
     init_db()
 
