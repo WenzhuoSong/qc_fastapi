@@ -98,6 +98,7 @@ class HoldingsRequest(BaseModel):
     current_holdings: Any
     top_candidates: Optional[List[str]] = None
     qc_regime: Optional[str] = None
+    qc_regime_detail: Optional[Dict[str, Any]] = None
     account_dd: Optional[float] = None
 
 
