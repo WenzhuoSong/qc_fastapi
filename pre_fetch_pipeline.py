@@ -17,14 +17,13 @@ Railway Cron (EST): 30 18 * * 1-5  (13:30 ET)
 import re
 import sys
 import time
-import json
 import asyncio
 import traceback
 from datetime import date, datetime, timedelta
-from typing import List
+from typing import List, Literal
 
 import httpx
-
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -35,6 +34,38 @@ from app.pipeline.data_fetcher import fetch_ticker_news
 BATCH_SIZE = 10
 PRE_FETCH_TIMEOUT = 600  # 10 minutes
 
+
+class NewsAnalysis(BaseModel):
+    index: int = Field(description="1-based index matching the input headline")
+    summary: str = Field(description="One sentence summary, max 30 words")
+    sentiment: Literal["positive", "negative", "neutral"]
+    is_hard_event: bool
+
+
+class BatchAnalysisResponse(BaseModel):
+    results: List[NewsAnalysis]
+
+
+_SUMMARIZE_SYSTEM = (
+    "You are a quantitative financial news analyst. Be concise and accurate.\n\n"
+    "CRITICAL — is_hard_event classification rules:\n"
+    "is_hard_event = true ONLY for NEGATIVE, BINARY-OUTCOME events with UNHEDGEABLE RISK:\n"
+    "  - Earnings miss / revenue shortfall / guidance cut\n"
+    "  - FDA rejection / clinical trial failure\n"
+    "  - Trading halt / suspension\n"
+    "  - Being acquired (target of takeover, NOT the acquirer)\n"
+    "  - SEC investigation / fraud allegation / class-action lawsuit\n"
+    "  - Bankruptcy filing / debt default\n"
+    "  - Regulatory ban / sanctions\n\n"
+    "is_hard_event = false for ALL of these:\n"
+    "  - Positive deals, partnerships, investments, contracts\n"
+    "  - Analyst upgrades/downgrades\n"
+    "  - General market commentary or sector trends\n"
+    "  - Price movements or trading volume\n"
+    "  - Product launches or expansion plans\n\n"
+    "When in doubt, set is_hard_event = false."
+)
+
 _CTRL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -42,7 +73,7 @@ def _sanitize(text: str) -> str:
     """Remove control characters and excessive whitespace that break JSON serialization."""
     text = _CTRL_CHARS.sub("", text)
     text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-    return text.strip()[:300]
+    return text.strip()
 
 
 async def summarize_headlines_batch(
@@ -50,6 +81,7 @@ async def summarize_headlines_batch(
 ) -> List[dict]:
     """Batch-summarize headlines for a single ticker with one LLM call.
 
+    Uses OpenAI Structured Outputs to guarantee valid JSON — no manual parsing.
     Returns a list of {summary, sentiment, is_hard_event} dicts,
     one per input headline (in order).
     """
@@ -71,67 +103,32 @@ async def summarize_headlines_batch(
         for i, item in enumerate(news_items[:BATCH_SIZE])
     )
 
-    prompt = (
-        f"Ticker: {ticker}\n"
-        f"Headlines:\n{headlines_block}\n\n"
-        "For each headline, return ONLY a JSON array (no markdown fences):\n"
-        "[\n"
-        '  {"index": 1, "summary": "<one sentence, max 20 words>", '
-        '"sentiment": "positive|negative|neutral", '
-        '"is_hard_event": true|false}\n'
-        "]\n\n"
-        "CRITICAL — is_hard_event classification rules:\n"
-        "  is_hard_event = true ONLY when the headline describes a NEGATIVE, "
-        "BINARY-OUTCOME event that creates UNHEDGEABLE RISK:\n"
-        "    - Earnings miss / revenue shortfall / guidance cut\n"
-        "    - FDA rejection / clinical trial failure\n"
-        "    - Trading halt / suspension\n"
-        "    - Being acquired (target of takeover, NOT the acquirer)\n"
-        "    - SEC investigation / fraud allegation / class-action lawsuit\n"
-        "    - Bankruptcy filing / debt default\n"
-        "    - Regulatory ban / sanctions\n\n"
-        "  is_hard_event = false for ALL of these:\n"
-        "    - Positive deals, partnerships, investments, contracts\n"
-        "    - Analyst upgrades/downgrades\n"
-        "    - General market commentary or sector trends\n"
-        "    - Price movements or trading volume\n"
-        "    - Product launches or expansion plans\n\n"
-        "When in doubt, set is_hard_event = false. Err on the side of caution."
-    )
-
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    response = await client.chat.completions.create(
-        model=settings.OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": "You are a financial news analyst. Be concise and accurate."},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.1,
-        max_tokens=1000,
-    )
-
-    raw = response.choices[0].message.content or "[]"
-
-    start = raw.find("[")
-    end = raw.rfind("]")
-    if start == -1 or end == -1:
-        return [
-            {"summary": it.get("headline", "")[:80], "sentiment": "neutral", "is_hard_event": False}
-            for it in news_items
-        ]
 
     try:
-        parsed = json.loads(raw[start:end + 1])
+        response = await client.beta.chat.completions.parse(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _SUMMARIZE_SYSTEM},
+                {"role": "user", "content": f"Ticker: {ticker}\nHeadlines:\n{headlines_block}"},
+            ],
+            temperature=0.0,
+            max_tokens=1000,
+            response_format=BatchAnalysisResponse,
+        )
+
+        parsed_results = response.choices[0].message.parsed.results
+
         results = []
         for i, item in enumerate(news_items[:BATCH_SIZE]):
-            matched = next((p for p in parsed if p.get("index") == i + 1), None)
+            matched = next((p for p in parsed_results if p.index == i + 1), None)
             if matched:
                 results.append({
-                    "summary": str(matched.get("summary", ""))[:200],
-                    "sentiment": matched.get("sentiment", "neutral"),
-                    "is_hard_event": bool(matched.get("is_hard_event", False)),
+                    "summary": matched.summary[:200],
+                    "sentiment": matched.sentiment,
+                    "is_hard_event": matched.is_hard_event,
                 })
             else:
                 results.append({
@@ -140,9 +137,15 @@ async def summarize_headlines_batch(
                     "is_hard_event": False,
                 })
         return results
-    except json.JSONDecodeError:
+
+    except Exception as e:
+        print(f"[LLM] summarize_headlines_batch error for {ticker}: {e}")
         return [
-            {"summary": it.get("headline", "")[:80], "sentiment": "neutral", "is_hard_event": False}
+            {
+                "summary": it.get("headline", "")[:80],
+                "sentiment": "neutral",
+                "is_hard_event": False,
+            }
             for it in news_items
         ]
 
