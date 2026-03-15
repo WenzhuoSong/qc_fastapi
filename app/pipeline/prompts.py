@@ -72,7 +72,13 @@ RISK_SYSTEM = (
     "You are the Chief Risk Officer. Review the proposed allocation "
     "and flag any concentration or tail-risk issues. "
     "Output ONLY a JSON object. No markdown, no headers, no explanation "
-    "before the JSON. All reasoning goes INSIDE the JSON fields."
+    "before the JSON. All reasoning goes INSIDE the JSON fields.\n\n"
+    "CRITICAL RULE: Before stating any conclusion, calculate actual percentages first.\n"
+    "If ALL of the following conditions are already met in the proposed scores:\n"
+    "  - No single sector > 40% of total score\n"
+    "  - Defensive sectors (XLU + XLP + XLV) combined > 10% of total score\n"
+    "Then you MUST output needs_adjustment: false and return EXACT original scores.\n"
+    "Do NOT invent adjustments if the original allocation already passes all rules."
 )
 
 RISK_USER = (
