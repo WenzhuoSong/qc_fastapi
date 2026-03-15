@@ -2,7 +2,7 @@
 
 A quantitative trading backend that **pre-computes portfolio allocations** using LLM-powered research grounded in real market data, and serves them via a lightweight API gateway to QuantConnect.
 
-**Core Philosophy**: AI does subtraction, not addition — high-confidence event filtering and risk-off detection, not price prediction. Computation and delivery are fully separated.
+**Core Philosophy**: AI does subtraction, not addition — high-confidence event filtering and risk-off detection, not price prediction. Computation and delivery are fully separated. Network-resilient cron pipelines with cold-start retry.
 
 ## Architecture
 
