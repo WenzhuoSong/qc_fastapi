@@ -59,8 +59,8 @@ qc_fastapi/
 │   │   │   ├── holdings.py       # POST — QC 10:00 ET position snapshot
 │   │   │   ├── decisions.py      # GET/PATCH — decision log review + backfill
 │   │   │   ├── health.py         # Health checks
-│   │   │   ├── crew.py           # CrewAI (legacy)
-│   │   │   └── tasks.py          # Task management (legacy)
+│   │   │   ├── crew.py           # (legacy, scheduled for removal)
+│   │   │   └── tasks.py          # (legacy, scheduled for removal)
 │   │   └── router.py
 │   ├── core/
 │   │   ├── security.py           # Bearer Token authentication
@@ -225,7 +225,9 @@ Crash at Step 2? Rerun skips Step 1 (already saved) and resumes from Step 2. No 
 
 1. **PostgreSQL** — Add via Railway Dashboard
 2. **Web Service** — FastAPI gateway (auto-deploys from GitHub)
-3. **Cron Job** — `python cron_pipeline.py` at `0 18 * * 1-5` (14:00 ET, weekdays)
+3. **Cron Job** — `python cron_pipeline.py` on weekdays:
+   - EDT (Mar–Nov): `0 18 * * 1-5` (UTC 18:00 = ET 14:00)
+   - EST (Nov–Mar): `0 19 * * 1-5` (UTC 19:00 = ET 14:00)
 
 ### Environment Variables
 
@@ -237,6 +239,67 @@ Crash at Step 2? Rerun skips Step 1 (already saved) and resumes from Step 2. No 
 | `FINNHUB_API_KEY` | Yes | Finnhub market data API key |
 | `TG_BOT_TOKEN` | No | Telegram bot token for alerts |
 | `TG_CHAT_ID` | No | Telegram chat ID for alerts |
+
+## QuantConnect Integration
+
+### 1. Submit Holdings (10:00 ET)
+
+In `OnMarketOpen` + 10 minutes, POST the current portfolio state:
+
+```python
+# QuantConnect — OnData or Scheduled Event at 10:10 ET
+import requests, json
+
+url = "https://your-app.up.railway.app/api/v1/holdings/"
+headers = {"Authorization": "Bearer YOUR_TOKEN"}
+payload = {
+    "current_holdings": [s.Value for s in self.Portfolio.Keys if self.Portfolio[s].Invested],
+    "qc_regime": self.regime,        # your strategy's regime label: "bull" / "chop" / "bear"
+    "account_dd": self.Portfolio.TotalUnrealizedProfit / self.Portfolio.TotalPortfolioValue
+}
+requests.post(url, json=payload, headers=headers, timeout=5)
+```
+
+### 2. Fetch Allocation (15:45 ET)
+
+In `BeforeMarketClose` - 15 minutes, GET the AI allocation:
+
+```python
+# QuantConnect — Scheduled Event at 15:45 ET
+resp = requests.get(
+    "https://your-app.up.railway.app/api/v1/allocation/",
+    headers={"Authorization": "Bearer YOUR_TOKEN"},
+    timeout=5
+).json()
+
+# Decision logic
+if resp["is_stale"]:
+    return  # stale data → hold current positions, don't rebalance
+
+# Apply defense_level to position sizing
+MAX_EXPOSURE = {"full": 1.0, "light": 0.7, "half": 0.5}
+scale = MAX_EXPOSURE.get(resp["defense_level"], 1.0)
+
+# Apply risk_flags — exclude flagged tickers from new buys
+blocked = set(resp.get("risk_flags", {}).keys())
+
+# Apply weights (during observation period: log only, don't execute)
+for etf, weight in resp["weights"].items():
+    target = weight * scale
+    self.SetHoldings(etf, target)
+```
+
+### 3. Observation Period (First 30 Days)
+
+During the initial period, log AI decisions but don't let them affect real positions:
+
+```python
+# Log only — compare AI vs actual performance
+self.Log(f"AI regime={resp['regime']} defense={resp['defense_level']} "
+         f"flags={resp.get('risk_flags', {})} weights={resp['weights']}")
+```
+
+After 30 days, analyze `decision_log` via the `/decisions/` endpoint to determine which AI signals are reliable enough to act on.
 
 ## Validation Workflow (Post-30 Days)
 
