@@ -29,16 +29,18 @@ from app.core.notifier import send_alert
 from app.pipeline.data_fetcher import (
     fetch_macro_news,
     fetch_economic_calendar,
-    fetch_all_holdings_news,
     fetch_earnings_flag,
-    scan_all_holdings_risks,
 )
 from app.pipeline.step1_macro import (
     run_macro_analysis,
     parse_macro_output,
     format_macro_context,
 )
-from app.pipeline.step2_micro import run_micro_scoring
+from app.pipeline.step2_micro import (
+    run_micro_scoring,
+    build_news_context_from_db,
+    build_hard_flags_from_db,
+)
 from app.pipeline.step3_risk import run_risk_audit
 from app.pipeline.step4_format import normalize_to_weights
 
@@ -129,32 +131,6 @@ def _compute_defense_level(effective_regime: str) -> str:
     return "full"
 
 
-def _build_ticker_risks(
-    tickers: List[str],
-    hard_risks: Dict[str, Dict[str, str]],
-    earnings_flags: Dict[str, bool],
-    news: Dict[str, list],
-) -> Dict[str, dict]:
-    """Combine hard risk scan with earnings/news data for DailyNewsDigest."""
-    risks = {}
-    for t in tickers:
-        t_hard = hard_risks.get(t, {})
-        if t_hard:
-            top_risk = next(iter(t_hard))
-            risks[t] = {
-                "risk": "high",
-                "reason": t_hard[top_risk],
-                "flags": list(t_hard.keys()),
-            }
-        elif earnings_flags.get(t):
-            risks[t] = {"risk": "high", "reason": "Upcoming earnings event", "flags": ["earnings_soon"]}
-        elif not news.get(t):
-            risks[t] = {"risk": "medium", "reason": "No recent news coverage", "flags": []}
-        else:
-            risks[t] = {"risk": "low", "reason": "Normal", "flags": []}
-    return risks
-
-
 # ═══════════════════════════════════════════════════════════════
 # Main pipeline
 # ═══════════════════════════════════════════════════════════════
@@ -228,7 +204,7 @@ async def run_pipeline(target_date: date) -> None:
 
         macro_context_str = format_macro_context(macro_parsed)
 
-        # ── Step 2: Micro Scoring (holdings + news + earnings + hard risks) ──
+        # ── Step 2: Micro Scoring (holdings + pre-fetched news + earnings) ──
         if row.status == "STEP1_DONE":
             print(f"[{target_date}] Running Step 2: Micro Scoring...")
 
@@ -236,42 +212,63 @@ async def run_pipeline(target_date: date) -> None:
             tickers = holdings_row.tickers if holdings_row else None
             print(f"[{target_date}]   Holdings: {tickers or '(none reported)'}")
 
-            news: dict = {}
-            earnings_flags: dict = {}
-            hard_risks: dict = {}
+            # Collect all tickers: holdings + top_candidates
+            all_tickers = list(tickers) if tickers else []
+            if holdings_row and holdings_row.payload:
+                candidates = holdings_row.payload.get("top_candidates", [])
+                for c in candidates:
+                    if c not in all_tickers:
+                        all_tickers.append(c)
 
-            if tickers:
-                print(f"[{target_date}]   Fetching company news...")
-                news = fetch_all_holdings_news(tickers)
-                print(f"[{target_date}]   News fetched for {len(news)} tickers")
+            news_digest_str = "(No news data available)"
+            earnings_flags: dict = {}
+
+            if all_tickers:
+                print(f"[{target_date}]   Reading pre-fetched news from DB for {len(all_tickers)} tickers...")
+                news_digest_str = build_news_context_from_db(db, all_tickers, target_date)
+
+                hard_flags = build_hard_flags_from_db(db, all_tickers, target_date)
+                if hard_flags:
+                    print(f"[{target_date}]   ⚠ Hard events from library: {list(hard_flags.keys())}")
+                else:
+                    print(f"[{target_date}]   No hard events in library")
 
                 print(f"[{target_date}]   Checking earnings calendar...")
-                earnings_flags = {t: fetch_earnings_flag(t) for t in tickers}
+                earnings_flags = {t: fetch_earnings_flag(t) for t in all_tickers}
                 upcoming = [t for t, v in earnings_flags.items() if v]
                 print(f"[{target_date}]   Earnings upcoming: {upcoming or 'none'}")
-
-                print(f"[{target_date}]   Scanning hard risks...")
-                hard_risks = scan_all_holdings_risks(tickers, news, earnings_flags)
-                flagged = {t: list(r.keys()) for t, r in hard_risks.items() if r}
-                if flagged:
-                    print(f"[{target_date}]   ⚠ Hard risk flags: {flagged}")
-                else:
-                    print(f"[{target_date}]   No hard risk flags")
 
             result = await run_micro_scoring(
                 target_date,
                 macro_context_str,
                 holdings=tickers,
-                news=news,
+                news_digest=news_digest_str,
                 earnings_flags=earnings_flags,
             )
             row.step2_micro_result = result
             row.status = "STEP2_DONE"
             db.commit()
 
-            # ── Update DailyNewsDigest with ticker_risks ──
-            if tickers:
-                ticker_risks = _build_ticker_risks(tickers, hard_risks, earnings_flags, news)
+            # ── Update DailyNewsDigest with ticker_risks from library ──
+            if all_tickers:
+                hard_flags = build_hard_flags_from_db(db, all_tickers, target_date)
+                ticker_risks = {}
+                for t in all_tickers:
+                    if t in hard_flags:
+                        ticker_risks[t] = {
+                            "risk": "high",
+                            "reason": hard_flags[t][0],
+                            "flags": hard_flags[t],
+                        }
+                    elif earnings_flags.get(t):
+                        ticker_risks[t] = {
+                            "risk": "high",
+                            "reason": "Upcoming earnings event",
+                            "flags": ["earnings_soon"],
+                        }
+                    else:
+                        ticker_risks[t] = {"risk": "low", "reason": "Normal", "flags": []}
+
                 digest = db.query(DailyNewsDigest).filter_by(date=target_date).first()
                 if digest:
                     digest.ticker_risks = ticker_risks

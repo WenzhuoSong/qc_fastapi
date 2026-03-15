@@ -7,34 +7,29 @@ A quantitative trading backend that **pre-computes portfolio allocations** using
 ## Architecture
 
 ```
- 10:00 ET                    14:00 ET                      15:45 ET
-    │                           │                              │
-    ▼                           ▼                              ▼
-┌────────┐    ┌─────────────────────────────────┐    ┌─────────────────┐
-│  QC    │───▶│         Cron Pipeline            │    │  FastAPI Gateway │
-│ POST   │    │                                  │    │  (24/7, <10ms)   │
-│holdings│    │  Finnhub ──┐                     │    │                  │
-└────────┘    │            ▼                     │    │ GET /allocation  │
-              │  Step 1: Macro Analysis          │    │  → weights       │
-              │    └─ news + calendar + history   │    │  → defense_level │
-              │  Step 2: Micro Scoring            │    │  → risk_flags    │
-              │    └─ holdings + news + earnings  │    │  → regime        │
-              │  Step 3: Risk Audit               │    │                  │
-              │  Step 4: Normalize Weights         │    │ GET /decisions   │
-              │                                   │    │  → audit trail   │
-              │  Hard Risk Scan                   │    │                  │
-              │  Gated Regime Override             │    │ PATCH /decisions │
-              └──────────┬────────────────────────┘    │  → backfill      │
-                         │                              └────────┬────────┘
-                         ▼                                       ▲
-              ┌──────────────────────┐                           │
-              │     PostgreSQL       │◀──────────────────────────┘
-              │                      │
-              │  daily_decisions     │  Checkpoint state machine
-              │  daily_holdings      │  QC position snapshot
-              │  daily_news_digest   │  Macro/micro summaries
-              │  decision_log        │  Audit trail + validation
-              └──────────────────────┘
+ 10:00 ET          13:30 ET              14:00 ET              15:45 ET
+    │                  │                     │                     │
+    ▼                  ▼                     ▼                     ▼
+┌────────┐    ┌──────────────┐    ┌──────────────────┐    ┌──────────────┐
+│  QC    │    │  Pre-Fetch   │    │  Cron Pipeline   │    │ FastAPI GW   │
+│ POST   │    │  Pipeline    │    │                  │    │ (24/7 <10ms) │
+│holdings│    │              │    │ Step 1: Macro    │    │              │
+│+regime │    │ Finnhub news │    │  news+calendar   │    │ GET /alloc   │
+│+cands  │    │ for 15-20    │    │  +history        │    │  weights     │
+└────┬───┘    │ tickers      │    │ Step 2: Micro    │    │  defense     │
+     │        │              │    │  read DB library │    │  risk_flags  │
+     │        │ LLM batch    │    │ Step 3: Risk     │    │  regime      │
+     │        │ summarize    │    │ Step 4: Weights  │    │              │
+     │        │              │    │ Regime Override   │    │ GET /decide  │
+     │        └──────┬───────┘    └────────┬─────────┘    └──────┬───────┘
+     │               │                     │                     │
+     ▼               ▼                     ▼                     ▲
+   ┌───────────────────────────────────────────────────────────────┐
+   │                       PostgreSQL                              │
+   │  daily_holdings        │  ticker_news_library  (pre-fetched)  │
+   │  daily_decisions       │  daily_news_digest                   │
+   │  decision_log          │                                      │
+   └───────────────────────────────────────────────────────────────┘
 ```
 
 ## Three-Layer Value Framework
@@ -51,7 +46,8 @@ A quantitative trading backend that **pre-computes portfolio allocations** using
 
 ```
 qc_fastapi/
-├── cron_pipeline.py              # Cron entry — checkpoint pipeline + regime override
+├── cron_pipeline.py              # Cron 1 (14:00 ET) — checkpoint pipeline + regime override
+├── pre_fetch_pipeline.py         # Cron 2 (13:30 ET) — news fetch + LLM batch summarize
 ├── app/
 │   ├── api/v1/
 │   │   ├── endpoints/
@@ -215,9 +211,10 @@ Crash at Step 2? Rerun skips Step 1 (already saved) and resumes from Step 2. No 
 | Table | Purpose |
 |-------|---------|
 | `daily_decisions` | Pipeline checkpoint state machine + final weights |
-| `daily_holdings` | QC 10:00 ET position snapshot (tickers + payload) |
+| `daily_holdings` | QC position snapshot (tickers + top_candidates + payload) |
 | `daily_news_digest` | Macro summary, regime, key events, ticker risks |
 | `decision_log` | Full audit: QC vs AI regime, override, defense, backfill fields |
+| `ticker_news_library` | Pre-fetched news with LLM summaries, sentiment, hard event flags |
 
 ## Railway Deployment
 
@@ -225,7 +222,10 @@ Crash at Step 2? Rerun skips Step 1 (already saved) and resumes from Step 2. No 
 
 1. **PostgreSQL** — Add via Railway Dashboard
 2. **Web Service** — FastAPI gateway (auto-deploys from GitHub)
-3. **Cron Job** — `python cron_pipeline.py` on weekdays:
+3. **Cron Job 1** — Pre-fetch: `python pre_fetch_pipeline.py` on weekdays:
+   - EDT (Mar–Nov): `30 17 * * 1-5` (UTC 17:30 = ET 13:30)
+   - EST (Nov–Mar): `30 18 * * 1-5` (UTC 18:30 = ET 13:30)
+4. **Cron Job 2** — Main pipeline: `python cron_pipeline.py` on weekdays:
    - EDT (Mar–Nov): `0 18 * * 1-5` (UTC 18:00 = ET 14:00)
    - EST (Nov–Mar): `0 19 * * 1-5` (UTC 19:00 = ET 14:00)
 
@@ -242,19 +242,20 @@ Crash at Step 2? Rerun skips Step 1 (already saved) and resumes from Step 2. No 
 
 ## QuantConnect Integration
 
-### 1. Submit Holdings (10:00 ET)
+### 1. Submit Holdings + Candidates (13:30 ET)
 
-In `OnMarketOpen` + 10 minutes, POST the current portfolio state:
+After momentum scoring completes, POST current holdings and top candidates:
 
 ```python
-# QuantConnect — OnData or Scheduled Event at 10:10 ET
-import requests, json
+# QuantConnect — Scheduled Event at 13:30 ET
+import requests
 
 url = "https://your-app.up.railway.app/api/v1/holdings/"
 headers = {"Authorization": "Bearer YOUR_TOKEN"}
 payload = {
     "current_holdings": [s.Value for s in self.Portfolio.Keys if self.Portfolio[s].Invested],
-    "qc_regime": self.regime,        # your strategy's regime label: "bull" / "chop" / "bear"
+    "top_candidates": self.get_momentum_top(15),  # top 15 momentum symbols
+    "qc_regime": self.regime,        # "bull" / "chop" / "bear"
     "account_dd": self.Portfolio.TotalUnrealizedProfit / self.Portfolio.TotalPortfolioValue
 }
 requests.post(url, json=payload, headers=headers, timeout=5)
@@ -320,7 +321,7 @@ ORDER BY date DESC;
 ## Tech Stack
 
 - **FastAPI** — API gateway (<10ms response)
-- **PostgreSQL** — Persistent state (4 tables)
+- **PostgreSQL** — Persistent state (5 tables)
 - **SQLAlchemy** — ORM with lazy initialization
 - **OpenAI** — LLM pipeline (gpt-4o-mini)
 - **Finnhub** — Real-time news, economic calendar, earnings

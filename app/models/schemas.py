@@ -89,8 +89,9 @@ class DecisionLogUpdate(BaseModel):
 # ── Holdings (QC 10:00 ET Snapshot) ──────────────────────────────────
 
 class HoldingsRequest(BaseModel):
-    """Payload from QuantConnect reporting current positions."""
+    """Payload from QuantConnect reporting current positions + momentum candidates."""
     current_holdings: List[str]
+    top_candidates: Optional[List[str]] = None
     qc_regime: Optional[str] = None
     account_dd: Optional[float] = None
 

@@ -1,14 +1,16 @@
 """
 ORM Models
 
-- DailyDecision:    Checkpoint state machine for the LLM research pipeline
-- DailyHoldings:    Intraday holdings snapshot reported by QuantConnect at 10:00 ET
-- DailyNewsDigest:  Structured macro/micro summary stored after each pipeline run
-- DecisionLog:      Full decision audit trail for post-hoc analysis
+- DailyDecision:      Checkpoint state machine for the LLM research pipeline
+- DailyHoldings:      Intraday holdings snapshot reported by QuantConnect
+- DailyNewsDigest:    Structured macro/micro summary stored after each pipeline run
+- DecisionLog:        Full decision audit trail for post-hoc analysis
+- TickerNewsLibrary:  Pre-fetched per-ticker news with LLM summaries and sentiment
 """
 
 import datetime
-from sqlalchemy import Column, Date, String, Text, DateTime, Boolean, Integer, func
+import uuid
+from sqlalchemy import Column, Date, String, Text, DateTime, Boolean, Integer, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.db.database import Base
@@ -41,7 +43,7 @@ class DailyDecision(Base):
 
 
 class DailyHoldings(Base):
-    """10:00 ET holdings snapshot from QuantConnect — serves as input context for the 14:00 pipeline."""
+    """Holdings snapshot from QuantConnect — updated at 10:00 or 13:30 ET."""
     __tablename__ = "daily_holdings"
 
     date = Column(Date, primary_key=True, default=datetime.date.today)
@@ -112,3 +114,33 @@ class DecisionLog(Base):
 
     def __repr__(self) -> str:
         return f"<DecisionLog {self.date} ai={self.ai_regime} override={self.regime_override}>"
+
+
+class TickerNewsLibrary(Base):
+    """Pre-fetched per-ticker news with LLM-generated summaries.
+
+    Populated by pre_fetch_pipeline.py at 13:30 ET for all top_candidates.
+    Read by cron_pipeline.py at 14:00 ET — no real-time API calls needed.
+    """
+    __tablename__ = "ticker_news_library"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    ticker = Column(String(10), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    headline = Column(Text, nullable=False)
+    source = Column(String(100), nullable=True)
+    llm_summary = Column(Text, nullable=True)
+    sentiment = Column(String(10), nullable=True)
+    is_hard_event = Column(Boolean, default=False)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "headline", name="uq_ticker_headline"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TickerNews {self.ticker} {self.date} hard={self.is_hard_event}>"
