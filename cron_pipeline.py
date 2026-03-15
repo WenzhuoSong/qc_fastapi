@@ -362,8 +362,9 @@ async def run_pipeline(target_date: date) -> None:
         db.close()
 
 
-def _wait_for_network(max_retries: int = 5, delay: int = 3) -> bool:
+def _wait_for_network(max_retries: int = 10, delay: int = 5) -> bool:
     """Block until outbound HTTPS is reachable (cold-start network init)."""
+    time.sleep(3)
     for i in range(max_retries):
         try:
             httpx.get("https://finnhub.io", timeout=5)
