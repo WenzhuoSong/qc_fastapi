@@ -23,8 +23,10 @@ def build_news_context_from_db(
     """Read pre-fetched news from ticker_news_library and format for LLM.
 
     Filters out not_relevant items and tags relevance level.
+    Hard events are prominently flagged for sector-level impact.
     """
     from app.db.models import TickerNewsLibrary
+    from app.constants import TICKER_TO_ETFS
 
     cutoff = target_date - timedelta(days=2)
     parts = []
@@ -63,8 +65,13 @@ def build_news_context_from_db(
             lines.append(f"  - {tag_str} {summary}")
 
         block = f"**{ticker}**:\n" + "\n".join(lines)
+
+        # Prominently flag hard events with sector impact notation
         if hard_events:
-            block += f"\n  ⚠ HARD EVENT: {hard_events[0].llm_summary}"
+            affected_etfs = TICKER_TO_ETFS.get(ticker, [])
+            etf_str = f" (AFFECTS: {', '.join(affected_etfs)})" if affected_etfs else ""
+            block += f"\n  🔴🔴🔴 HARD EVENT{etf_str}: {hard_events[0].llm_summary} 🔴🔴🔴"
+
         parts.append(block)
 
     return "\n\n".join(parts) if parts else "(No news data available)"
@@ -135,6 +142,18 @@ def _format_earnings_flags(flags: Dict[str, bool]) -> str:
     return "\n".join(lines)
 
 
+def _format_hard_flags(flags: Dict[str, List[str]]) -> str:
+    """Format hard event flags for the LLM prompt."""
+    if not flags:
+        return "(No hard events detected)"
+
+    lines = ["🔴 HARD EVENTS DETECTED — Apply sector penalty if any holding affected:"]
+    for ticker, summaries in flags.items():
+        for summary in summaries[:1]:  # Show first event per ticker
+            lines.append(f"  - {ticker}: {summary}")
+    return "\n".join(lines)
+
+
 async def run_micro_scoring(
     target_date: date,
     macro_context: str,
@@ -142,18 +161,22 @@ async def run_micro_scoring(
     news_digest: str = "(No news data available)",
     sector_context: str = "(No sector data available)",
     earnings_flags: Dict[str, bool] | None = None,
+    hard_flags: Dict[str, List[str]] | None = None,
 ) -> str:
     """Score sector ETFs given macro backdrop, holdings, dual-layer news, and earnings.
 
     news_digest: per-ticker news from build_news_context_from_db()
     sector_context: per-ETF outlook from build_sector_context_from_db()
+    hard_flags: ticker-level hard events that impact sectors
     """
     holdings_str = ", ".join(holdings) if holdings else "(no holdings reported)"
     earnings_str = _format_earnings_flags(earnings_flags or {})
+    hard_flags_str = _format_hard_flags(hard_flags or {})
 
     combined_news = (
         f"### Sector Outlook (from pre-fetch)\n{sector_context}\n\n"
-        f"### Individual Ticker News\n{news_digest}"
+        f"### Individual Ticker News\n{news_digest}\n\n"
+        f"### Hard Event Flags (SECTOR IMPACT)\n{hard_flags_str}"
     )
 
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-test"):

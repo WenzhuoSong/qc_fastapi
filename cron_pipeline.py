@@ -90,58 +90,92 @@ def _apply_regime_override(
 
     Returns (effective_regime, was_overridden, override_reason).
 
-    Override requires ALL conditions:
-      1. AI confidence >= 80
-      2. AI regime differs from QC
-      3. AI has >= 2 key events as evidence
-      4. AI regime is Risk-Off (downgrade only)
-    """
-    ai_regime = macro_parsed.get("regime", "Neutral")
-    confidence = macro_parsed.get("confidence", 50)
-    key_events = macro_parsed.get("key_events", [])
+    TIERED OVERRIDE LOGIC:
 
-    if qc_regime is None:
+    Tier A - Geopolitical Emergency: If AI detects Risk-Off with war/oil/crisis keywords,
+             override triggers at lower confidence (>= 60) to catch black swan events.
+
+    Tier B - Confidence-Based: Traditional high-confidence override (>= 80).
+    """
+    import re
+
+    ai_regime = str(macro_parsed.get("regime", "Neutral"))
+    try:
+        confidence = int(macro_parsed.get("confidence", 50))
+    except (TypeError, ValueError):
+        confidence = 50
+
+    # Support both key_events and events keys (for robustness)
+    key_events = macro_parsed.get("key_events") or macro_parsed.get("events") or []
+    if not isinstance(key_events, list):
+        key_events = [str(key_events)]
+    reasoning = str(macro_parsed.get("reasoning", ""))
+
+    if not qc_regime:
         return ai_regime, False, "No QC regime provided"
 
-    if qc_regime.lower() == ai_regime.lower().replace("-", "").replace(" ", ""):
+    # Normalize for comparison
+    ai_norm = re.sub(r'[^a-z]', '', ai_regime.lower())
+    qc_norm = re.sub(r'[^a-z]', '', qc_regime.lower())
+
+    if ai_norm == qc_norm:
         return ai_regime, False, "QC and AI agree"
 
-    conditions = [
-        confidence >= 80,
-        len(key_events) >= 2,
-        ai_regime.lower().replace("-", "").replace(" ", "") == "riskoff",
+    # Only allow Risk-Off downgrade overrides (safety constraint)
+    if ai_norm != "riskoff":
+        return qc_regime, False, f"AI not Risk-Off ({ai_regime}), keeping QC={qc_regime}"
+
+    # ── TIER A: Geopolitical Emergency Override (lower threshold) ──
+    GEOPOLITICAL_KEYWORDS = [
+        "war", "invasion", "attack", "missile", "bombing", "military",
+        "oil", "crude", "embargo", "sanctions", "supply disruption",
+        "iran", "ukraine", "russia", "israel", "hamas", "strait", "hormuz",
+        "opec", "energy crisis", "inflation shock",
     ]
 
-    if all(conditions):
+    combined_text = (" ".join(str(e) for e in key_events) + " " + reasoning).lower()
+    matches = [kw for kw in GEOPOLITICAL_KEYWORDS if kw in combined_text]
+
+    if matches and confidence >= 60 and len(key_events) >= 2:
         reason = (
-            f"AI override: {qc_regime}→{ai_regime} "
-            f"(confidence={confidence}, events={key_events[:3]})"
+            f"GEO OVERRIDE: {qc_regime}→{ai_regime} | "
+            f"keywords={matches[:3]}, conf={confidence}, events={len(key_events)}"
         )
         return ai_regime, True, reason
 
-    reason = (
-        f"Override blocked: confidence={confidence}, "
-        f"events={len(key_events)}, ai_regime={ai_regime}. "
-        f"Keeping QC regime={qc_regime}"
+    # ── TIER B: Traditional Confidence-Based Override ──
+    if confidence >= 80 and len(key_events) >= 2:
+        reason = (
+            f"CONF OVERRIDE: {qc_regime}→{ai_regime} | "
+            f"conf={confidence}, events={len(key_events)}"
+        )
+        return ai_regime, True, reason
+
+    return qc_regime, False, (
+        f"Override blocked: conf={confidence}, events={len(key_events)}, "
+        f"no geo keywords matched. Keeping QC={qc_regime}"
     )
-    return qc_regime, False, reason
 
 
 def _compute_defense_level(effective_regime: str) -> str:
     """Map effective regime to defense level.
 
     After gated override, the effective regime already reflects the
-    correct call. Simple mapping:
-      Risk-Off → half
-      Neutral  → light
-      else     → full
+    correct call. Explicit mapping for all known regime values.
     """
-    r = effective_regime.lower().replace("-", "").replace(" ", "")
-    if r == "riskoff":
-        return "half"
-    if r == "neutral":
-        return "light"
-    return "full"
+    import re
+
+    # Normalize: remove non-alphabetic chars and lowercase
+    r = re.sub(r'[^a-z]', '', effective_regime.lower())
+
+    REGIME_TO_DEFENSE = {
+        "riskoff": "half",      # Risk-Off: activate defense
+        "neutral": "light",     # Neutral: light defense
+        "chop": "light",        # Chop (sideways): treat as neutral
+        "riskon": "none",       # Risk-On: no defense
+    }
+
+    return REGIME_TO_DEFENSE.get(r, "light")  # Default to light for unknown
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -249,6 +283,7 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
             news_digest_str = "(No news data available)"
             sector_context_str = "(No sector data available)"
             earnings_flags: dict = {}
+            hard_flags: Dict[str, List[str]] = {}
 
             if all_tickers:
                 print(f"[{target_date}]   Reading pre-fetched news from DB for {len(all_tickers)} tickers...")
@@ -275,6 +310,7 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                 news_digest=news_digest_str,
                 sector_context=sector_context_str,
                 earnings_flags=earnings_flags,
+                hard_flags=hard_flags,
             )
             row.step2_micro_result = result
             row.status = "STEP2_DONE"
