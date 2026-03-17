@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.core.security import verify_token
+from app.core.security import verify_token_flexible
 from app.db.database import get_db
 from app.db.models import DailyDecision, DailyNewsDigest, DecisionLog
 from app.models.schemas import AllocationResponse
@@ -43,10 +43,13 @@ def _extract_risk_flags(digest: DailyNewsDigest | None) -> dict:
 
 @router.get("/", response_model=AllocationResponse)
 async def get_allocation(
-    _token: str = Depends(verify_token),
+    _token: str = Depends(verify_token_flexible),
     db: Session = Depends(get_db),
 ):
-    """Return the latest portfolio allocation weights for QuantConnect."""
+    """Return the latest portfolio allocation weights for QuantConnect.
+
+    Supports both Bearer token and query param (?token=xxx) for QC compatibility.
+    """
     today = date.today()
 
     today_row = db.query(DailyDecision).filter_by(
@@ -64,6 +67,8 @@ async def get_allocation(
             defense_level=log.defense_level if log else "full",
             risk_flags=_extract_risk_flags(digest),
             regime=log.ai_regime if log else None,
+            confidence=log.confidence if log else None,
+            regime_override=log.regime_override if log else None,
         )
 
     latest_row = (
@@ -84,6 +89,8 @@ async def get_allocation(
             defense_level=log.defense_level if log else "full",
             risk_flags=_extract_risk_flags(digest),
             regime=log.ai_regime if log else None,
+            confidence=log.confidence if log else None,
+            regime_override=log.regime_override if log else None,
             message=f"No READY data for {today}, using {latest_row.date}",
         )
 

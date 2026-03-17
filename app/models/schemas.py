@@ -62,6 +62,8 @@ class AllocationResponse(BaseModel):
     defense_level: str = "full"
     risk_flags: Dict[str, List[str]] = {}
     regime: Optional[str] = None
+    confidence: Optional[int] = None
+    regime_override: Optional[bool] = None
     message: Optional[str] = None
 
 
