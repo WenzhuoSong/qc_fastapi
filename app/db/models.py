@@ -129,7 +129,7 @@ class TickerNewsLibrary(Base):
     - related: contagion analysis (related tickers from Finnhub)
     - datetime_utc: Unix timestamp for time-series clustering
     - url: optional link to full article
-    - credibility: source trustworthiness score (0.0-1.0)
+    - credibility: source trustworthiness score (0-100 integer)
     """
     __tablename__ = "ticker_news_library"
 
