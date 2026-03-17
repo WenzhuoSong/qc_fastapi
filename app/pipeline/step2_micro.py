@@ -4,18 +4,240 @@ Step 2 — Micro Sector Scoring (with Holdings + Dual-Layer News + Earnings)
 Takes the macro thesis from Step 1, current holdings from QC,
 pre-fetched dual-layer news (ticker + sector), and earnings
 flags to produce grounded ETF scores.
+
+Changes vs previous version:
+  - MICRO_SYSTEM / MICRO_USER replaced with inline STEP2_SYSTEM
+    (richer macro transmission rules, applied_macro_rule CoT field)
+  - SectorScores Pydantic model + Structured Outputs (guaranteed JSON)
+  - _validate_scores() program-level safety net (hard floors/ceilings)
+  - temperature lowered to 0.0 for deterministic rule-following
+  - DB builder functions preserved exactly as-is
 """
 
+import json
+import logging
+import re
 import asyncio
 from datetime import date, timedelta
-from typing import List, Dict
+from typing import Dict, List, Optional
 
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.constants import ETF_TOP5
-from app.pipeline.prompts import MICRO_SYSTEM, MICRO_USER
 
+logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Pydantic output schema
+# ═══════════════════════════════════════════════════════════════
+
+class SectorScores(BaseModel):
+    XLK:  int = Field(ge=1, le=10, description="Technology")
+    XLF:  int = Field(ge=1, le=10, description="Financials")
+    XLV:  int = Field(ge=1, le=10, description="Healthcare")
+    XLE:  int = Field(ge=1, le=10, description="Energy")
+    XLI:  int = Field(ge=1, le=10, description="Industrials / Defense")
+    XLP:  int = Field(ge=1, le=10, description="Consumer Staples")
+    XLU:  int = Field(ge=1, le=10, description="Utilities")
+    XLY:  int = Field(ge=1, le=10, description="Consumer Discretionary")
+    XLC:  int = Field(ge=1, le=10, description="Communication Services")
+    XLRE: int = Field(ge=1, le=10, description="Real Estate")
+    XLB:  int = Field(ge=1, le=10, description="Materials")
+
+    # CoT anchor — forces the model to name the rule BEFORE committing scores.
+    # Dramatically improves floor/ceiling compliance.
+    applied_macro_rule: str = Field(
+        description=(
+            "Which macro transmission rule was triggered? "
+            "Must be one of: 'Supply Shock', 'Rate Hike', 'Recession', "
+            "'Risk-On', 'None'. Write this BEFORE you assign any scores."
+        )
+    )
+    reasoning: str = Field(
+        description=(
+            "Per-sector brief rationale explaining how the macro "
+            "floor/ceiling was combined with micro news for each ETF."
+        )
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# System prompt
+# ═══════════════════════════════════════════════════════════════
+
+STEP2_SYSTEM = """
+You are a quantitative portfolio strategist supporting an automated US equity
+momentum strategy running on QuantConnect. Your job is to score 11 S&P sector
+ETFs (1-10) to guide daily sector rotation.
+
+STRATEGY CONTEXT
+----------------
+- Momentum strategy; holdings are selected from S&P 500 top-momentum stocks.
+- Strategy rebalances daily based on your sector scores.
+- Higher score = increase allocation. Lower score = reduce allocation.
+
+SECTOR ETF UNIVERSE
+-------------------
+XLK  = Technology          XLF  = Financials       XLV  = Healthcare
+XLE  = Energy              XLI  = Industrials       XLP  = Consumer Staples
+XLU  = Utilities           XLY  = Consumer Discret  XLC  = Communication
+XLRE = Real Estate         XLB  = Materials
+
+=================================================================
+MACRO TRANSMISSION RULES -- APPLY THESE FIRST, BEFORE MICRO NEWS
+=================================================================
+
+STEP 1 (MANDATORY): Identify which rule applies from KEY EVENTS.
+Write the rule name in `applied_macro_rule` BEFORE assigning any scores.
+
+RULE: Supply Shock
+  Trigger: war / invasion / oil embargo / Iran / Hormuz /
+           OPEC cut / energy crisis / geopolitical conflict
+
+  FLOORS (score must be AT LEAST this value):
+    XLE  >= 8   (supply shock = direct price beneficiary)
+    XLI  >= 7   (defense + industrial spending surge)
+    XLP  >= 7   (staples = inflation & crisis haven)
+    XLU  >= 7   (utilities = defensive haven)
+    XLV  >= 6   (healthcare is non-cyclical)
+
+  CEILINGS (score must be AT MOST this value):
+    XLK  <= 4   (growth/tech punished in risk-off)
+    XLC  <= 4   (communication/growth punished)
+    XLY  <= 3   (discretionary hit hard by inflation)
+    XLRE <= 3   (rate-sensitive, hurt by inflation expectation)
+
+RULE: Rate Hike / Hawkish Fed
+  Trigger: rate hike / Fed hawkish / inflation shock / CPI beat
+
+  FLOORS: XLF >= 7,  XLE >= 6,  XLP >= 6
+  CEILINGS: XLRE <= 3,  XLK <= 4,  XLY <= 4,  XLC <= 5
+
+RULE: Recession / Demand Collapse
+  Trigger: recession / GDP contraction / demand collapse /
+           credit crisis / unemployment spike
+
+  FLOORS: XLP >= 8,  XLU >= 8,  XLV >= 8
+  CEILINGS: XLE <= 4,  XLY <= 3,  XLB <= 3,  XLF <= 4
+
+RULE: Risk-On / Bull Market
+  Trigger: strong GDP / broad earnings beats / Fed pivot /
+           VIX collapse / credit spreads tightening
+
+  FLOORS: XLK >= 7,  XLY >= 7,  XLC >= 6
+  CEILINGS: XLP <= 5,  XLU <= 5,  XLV <= 6
+
+If no rule applies: set applied_macro_rule = "None" and score freely.
+
+STEP 2: Micro adjustment
+After applying macro floors/ceilings, you may adjust by +/-2 based on
+sector-specific news. You CANNOT violate a macro floor or ceiling by
+more than 1 point.
+
+STEP 3: Hard event penalty
+If a holding ticker has a HARD EVENT flag (marked with red circles),
+its primary sector ceiling = 4.
+
+STEP 4: Final self-check before output
+- applied_macro_rule is written
+- No growth sector (XLK/XLC/XLY) scores > 5 when regime is Risk-Off
+- No defensive sector (XLP/XLU/XLV) scores < 5 when regime is Risk-Off
+
+OUTPUT: Return ONLY the SectorScores JSON. No markdown outside JSON fields.
+"""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Program-level score validator  (Layer 3 safety net)
+# ═══════════════════════════════════════════════════════════════
+
+_SUPPLY_SHOCK_KW = [
+    "war", "invasion", "attack", "missile", "bombing", "military",
+    "oil", "crude", "embargo", "sanctions", "supply disruption",
+    "iran", "ukraine", "russia", "israel", "hamas", "strait", "hormuz",
+    "opec", "energy crisis",
+]
+_RATE_HIKE_KW = [
+    "rate hike", "rate increase", "hawkish", "fed tightening",
+    "inflation shock", "cpi beat", "yields surge",
+]
+_RECESSION_KW = [
+    "recession", "gdp contraction", "demand collapse",
+    "credit crisis", "unemployment spike", "layoffs surge",
+]
+
+
+def _validate_scores(
+    scores: Dict[str, int],
+    key_events: List[str],
+    reasoning: str = "",
+    applied_rule: str = "None",
+) -> tuple[Dict[str, int], List[str]]:
+    """
+    Hard-override scores that violate macro rules.
+
+    Validator floors/ceilings are 1 point looser than prompt rules to
+    preserve micro-adjustment room while blocking extreme drift.
+    Returns (corrected_scores, list_of_override_messages).
+    """
+    combined = (
+        " ".join(str(e) for e in key_events)
+        + " " + reasoning
+        + " " + applied_rule
+    ).lower()
+
+    overrides: List[str] = []
+
+    def _floor(etf: str, floor: int, rule: str) -> None:
+        if scores.get(etf, 5) < floor:
+            overrides.append(
+                f"VALIDATOR: {etf} {scores[etf]}→{floor} (floor, {rule})"
+            )
+            scores[etf] = floor
+
+    def _ceil(etf: str, ceiling: int, rule: str) -> None:
+        if scores.get(etf, 5) > ceiling:
+            overrides.append(
+                f"VALIDATOR: {etf} {scores[etf]}→{ceiling} (ceiling, {rule})"
+            )
+            scores[etf] = ceiling
+
+    is_supply_shock = any(kw in combined for kw in _SUPPLY_SHOCK_KW)
+    is_rate_hike    = any(kw in combined for kw in _RATE_HIKE_KW)
+    is_recession    = any(kw in combined for kw in _RECESSION_KW)
+
+    if is_supply_shock:
+        _floor("XLE",  7, "supply_shock")
+        _floor("XLI",  6, "supply_shock")
+        _floor("XLP",  6, "supply_shock")
+        _floor("XLU",  6, "supply_shock")
+        _ceil ("XLK",  5, "supply_shock")
+        _ceil ("XLC",  5, "supply_shock")
+        _ceil ("XLY",  4, "supply_shock")
+        _ceil ("XLRE", 4, "supply_shock")
+
+    if is_rate_hike:
+        _floor("XLF",  6, "rate_hike")
+        _ceil ("XLRE", 4, "rate_hike")
+        _ceil ("XLK",  5, "rate_hike")
+
+    if is_recession:
+        _floor("XLP",  7, "recession")
+        _floor("XLU",  7, "recession")
+        _floor("XLV",  7, "recession")
+        _ceil ("XLE",  5, "recession")
+        _ceil ("XLY",  4, "recession")
+        _ceil ("XLB",  4, "recession")
+
+    return scores, overrides
+
+
+# ═══════════════════════════════════════════════════════════════
+# DB context builders  (preserved from original)
+# ═══════════════════════════════════════════════════════════════
 
 def build_news_context_from_db(
     db: Session, tickers: List[str], target_date: date
@@ -69,8 +291,13 @@ def build_news_context_from_db(
         # Prominently flag hard events with sector impact notation
         if hard_events:
             affected_etfs = TICKER_TO_ETFS.get(ticker, [])
-            etf_str = f" (AFFECTS: {', '.join(affected_etfs)})" if affected_etfs else ""
-            block += f"\n  🔴🔴🔴 HARD EVENT{etf_str}: {hard_events[0].llm_summary} 🔴🔴🔴"
+            etf_str = (
+                f" (AFFECTS: {', '.join(affected_etfs)})" if affected_etfs else ""
+            )
+            block += (
+                f"\n  HARD EVENT{etf_str}: "
+                f"{hard_events[0].llm_summary}"
+            )
 
         parts.append(block)
 
@@ -92,7 +319,10 @@ def build_sector_context_from_db(db: Session, target_date: date) -> str:
             continue
 
         themes = ", ".join(row.key_themes) if row.key_themes else "N/A"
-        tickers = ", ".join(row.contributing_tickers) if row.contributing_tickers else "N/A"
+        tickers = (
+            ", ".join(row.contributing_tickers)
+            if row.contributing_tickers else "N/A"
+        )
         parts.append(
             f"**{etf}** [{row.outlook}] ({row.sentiment}): "
             f"{row.sector_summary}\n"
@@ -122,18 +352,22 @@ def build_hard_flags_from_db(
             .all()
         )
         if hard_rows:
-            flags[ticker] = [r.llm_summary or r.headline[:60] for r in hard_rows]
+            flags[ticker] = [
+                r.llm_summary or r.headline[:60] for r in hard_rows
+            ]
 
     return flags
 
 
+# ═══════════════════════════════════════════════════════════════
+# Internal formatting helpers
+# ═══════════════════════════════════════════════════════════════
+
 def _format_earnings_flags(flags: Dict[str, bool]) -> str:
     if not flags:
         return "(No earnings data available)"
-
     upcoming = [t for t, has in flags.items() if has]
-    clear = [t for t, has in flags.items() if not has]
-
+    clear    = [t for t, has in flags.items() if not has]
     lines = []
     if upcoming:
         lines.append(f"UPCOMING EARNINGS (high risk): {', '.join(upcoming)}")
@@ -143,34 +377,55 @@ def _format_earnings_flags(flags: Dict[str, bool]) -> str:
 
 
 def _format_hard_flags(flags: Dict[str, List[str]]) -> str:
-    """Format hard event flags for the LLM prompt."""
     if not flags:
         return "(No hard events detected)"
-
-    lines = ["🔴 HARD EVENTS DETECTED — Apply sector penalty if any holding affected:"]
+    lines = [
+        "HARD EVENTS DETECTED -- Apply sector ceiling = 4 if holding affected:"
+    ]
     for ticker, summaries in flags.items():
-        for summary in summaries[:1]:  # Show first event per ticker
-            lines.append(f"  - {ticker}: {summary}")
+        lines.append(f"  - {ticker}: {summaries[0]}")
     return "\n".join(lines)
 
+
+def _extract_key_events_from_context(macro_context: str) -> List[str]:
+    """Pull numbered event lines out of format_macro_context output.
+
+    Matches lines like:  [1] Iran war escalates oil supply risk
+    """
+    events = []
+    for line in macro_context.splitlines():
+        stripped = line.strip()
+        if re.match(r'^\[\d+\]', stripped):
+            events.append(stripped)
+    # Fall back to full context if no structured events found
+    return events if events else [macro_context]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Main scoring function
+# ═══════════════════════════════════════════════════════════════
 
 async def run_micro_scoring(
     target_date: date,
     macro_context: str,
-    holdings: List[str] | None = None,
+    holdings: Optional[List[str]] = None,
     news_digest: str = "(No news data available)",
     sector_context: str = "(No sector data available)",
-    earnings_flags: Dict[str, bool] | None = None,
-    hard_flags: Dict[str, List[str]] | None = None,
+    earnings_flags: Optional[Dict[str, bool]] = None,
+    hard_flags: Optional[Dict[str, List[str]]] = None,
 ) -> str:
-    """Score sector ETFs given macro backdrop, holdings, dual-layer news, and earnings.
-
-    news_digest: per-ticker news from build_news_context_from_db()
-    sector_context: per-ETF outlook from build_sector_context_from_db()
-    hard_flags: ticker-level hard events that impact sectors
     """
-    holdings_str = ", ".join(holdings) if holdings else "(no holdings reported)"
-    earnings_str = _format_earnings_flags(earnings_flags or {})
+    Score sector ETFs given macro backdrop, holdings, dual-layer news, earnings.
+
+    Three-layer defence:
+      Layer 1 -- STEP2_SYSTEM prompt with transmission rules
+      Layer 2 -- applied_macro_rule CoT field (model names rule before scoring)
+      Layer 3 -- _validate_scores() hard floor/ceiling override
+
+    Returns raw JSON string for Step 3 / Step 4 consumption.
+    """
+    holdings_str   = ", ".join(holdings) if holdings else "(no holdings reported)"
+    earnings_str   = _format_earnings_flags(earnings_flags or {})
     hard_flags_str = _format_hard_flags(hard_flags or {})
 
     combined_news = (
@@ -179,31 +434,91 @@ async def run_micro_scoring(
         f"### Hard Event Flags (SECTOR IMPACT)\n{hard_flags_str}"
     )
 
+    # ── Stub mode ──
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-test"):
         await asyncio.sleep(1)
-        return (
-            f'[MOCK] Micro scores for {target_date} '
-            f'(holdings: {holdings_str}): '
-            '{"XLK": 9, "XLF": 7, "XLV": 5, "XLE": 4, "XLI": 6, '
-            '"XLP": 3, "XLU": 2, "XLY": 6, "XLC": 7, "XLRE": 2, "XLB": 4}'
-        )
+        stub = {etf: 5 for etf in
+                ["XLK","XLF","XLV","XLE","XLI","XLP","XLU","XLY","XLC","XLRE","XLB"]}
+        stub["applied_macro_rule"] = "None"
+        stub["reasoning"] = "Stub mode -- no API key"
+        return json.dumps(stub)
 
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    response = await client.chat.completions.create(
-        model=settings.OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": MICRO_SYSTEM},
-            {"role": "user", "content": MICRO_USER.format(
-                date=target_date,
-                macro_context=macro_context,
-                holdings=holdings_str,
-                news_digest=combined_news,
-                earnings_flags=earnings_str,
-            )},
-        ],
-        temperature=0.2,
-        max_tokens=800,
-    )
-    return response.choices[0].message.content or ""
+
+    user_prompt = f"""
+{macro_context}
+
+=== CURRENT HOLDINGS ===
+{holdings_str}
+
+=== NEWS & SECTOR INTELLIGENCE ===
+{combined_news}
+
+=== EARNINGS CALENDAR ===
+{earnings_str}
+
+---
+REMINDER -- follow the 4-step scoring process in the system prompt:
+1. Write applied_macro_rule first (Supply Shock / Rate Hike / Recession / Risk-On / None)
+2. Apply macro floors/ceilings from the matching rule
+3. Adjust +/-2 max using sector/ticker news above
+4. Apply hard event penalty (sector ceiling = 4) if any holding is flagged
+"""
+
+    try:
+        response = await client.beta.chat.completions.parse(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": STEP2_SYSTEM},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=800,
+            response_format=SectorScores,
+        )
+
+        parsed: SectorScores = response.choices[0].message.parsed
+
+        scores: Dict[str, int] = {
+            "XLK":  parsed.XLK,
+            "XLF":  parsed.XLF,
+            "XLV":  parsed.XLV,
+            "XLE":  parsed.XLE,
+            "XLI":  parsed.XLI,
+            "XLP":  parsed.XLP,
+            "XLU":  parsed.XLU,
+            "XLY":  parsed.XLY,
+            "XLC":  parsed.XLC,
+            "XLRE": parsed.XLRE,
+            "XLB":  parsed.XLB,
+        }
+
+        # ── Layer 3: program-level validator ──
+        key_events = _extract_key_events_from_context(macro_context)
+        corrected, overrides = _validate_scores(
+            scores,
+            key_events=key_events,
+            reasoning=parsed.reasoning,
+            applied_rule=parsed.applied_macro_rule,
+        )
+
+        if overrides:
+            for msg in overrides:
+                logger.warning("[Step2] %s", msg)
+                print(f"[{target_date}]   {msg}", flush=True)
+
+        # Attach metadata for downstream logging / Step 3
+        corrected["applied_macro_rule"] = parsed.applied_macro_rule
+        corrected["reasoning"] = parsed.reasoning
+
+        return json.dumps(corrected, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error("[Step2] run_micro_scoring error: %s", e)
+        fallback = {etf: 5 for etf in
+                    ["XLK","XLF","XLV","XLE","XLI","XLP","XLU","XLY","XLC","XLRE","XLB"]}
+        fallback["applied_macro_rule"] = "None"
+        fallback["reasoning"] = f"LLM error -- fallback neutral scores: {e}"
+        return json.dumps(fallback)

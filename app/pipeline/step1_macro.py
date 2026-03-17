@@ -126,27 +126,58 @@ def format_qc_quantitative_context(qc_data: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def format_macro_context(parsed: Dict[str, Any]) -> str:
-    """Format Step 1 output into a readable string for Step 2/3 consumption.
-
-    Accepts either a Step1Output dict or a raw dict from checkpoint resume.
+def format_macro_context(macro_parsed: dict) -> str:
     """
-    regime = parsed.get("regime", "Unknown")
-    confidence = parsed.get("confidence", "?")
-    summary = parsed.get("summary", "")
-    reasoning = parsed.get("reasoning", "")
-    events = parsed.get("key_events", [])
-
-    lines = [
-        f"Regime: {regime} (Confidence: {confidence}/100)",
-        f"Summary: {summary}",
-    ]
-    if events:
-        lines.append(f"Key Events: {', '.join(str(e) for e in events)}")
-    if reasoning:
-        lines.append(f"Reasoning: {reasoning}")
-
-    return "\n".join(lines)
+    Convert Step 1 macro JSON into a richly structured text block for Step 2.
+ 
+    Goal: ensure every war/oil/crisis keyword survives into Step 2's context
+    window intact, so Macro Transmission Rules fire correctly.
+ 
+    Output format is designed so _extract_key_events_from_context() in
+    step2_micro.py can parse the numbered event lines for the validator.
+    """
+    regime     = macro_parsed.get("regime", "Neutral")
+    confidence = macro_parsed.get("confidence", 50)
+    summary    = macro_parsed.get("summary", "No macro summary available.")
+    events     = (
+        macro_parsed.get("key_events")
+        or macro_parsed.get("events")
+        or []
+    )
+    reasoning  = macro_parsed.get("reasoning", "No reasoning provided.")
+ 
+    # Severity label anchors Step 2's rule application strength
+    try:
+        conf_int = int(confidence)
+    except (TypeError, ValueError):
+        conf_int = 50
+ 
+    if conf_int >= 80:
+        severity = "HIGH -- strong conviction, apply macro rules strictly"
+    elif conf_int >= 60:
+        severity = "MEDIUM -- apply macro rules, allow +/-1 micro adjustment"
+    else:
+        severity = "LOW -- macro rules are advisory, micro news may dominate"
+ 
+    # Numbered list so step2_micro._extract_key_events_from_context() can parse
+    events_str = (
+        "\n".join(f"  [{i+1}] {e}" for i, e in enumerate(events))
+        if events else "  - None detected"
+    )
+ 
+    context = f"""=== GLOBAL MACRO ENVIRONMENT ===
+                MACRO REGIME  : {regime}
+                CONFIDENCE    : {conf_int}/100  ({severity})
+                SUMMARY       : {summary}
+                
+                KEY EVENTS (USE THESE TO TRIGGER TRANSMISSION RULES):
+                {events_str}
+                
+                MACRO REASONING:
+                {reasoning}
+                ================================="""
+ 
+    return context
 
 
 async def run_macro_analysis(
