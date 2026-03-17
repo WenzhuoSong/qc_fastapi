@@ -43,7 +43,11 @@ def _token() -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def fetch_macro_news(limit: int = 20) -> List[dict]:
-    """Fetch latest general market news (past ~24 h)."""
+    """Fetch latest general market news (past ~24 h).
+
+    Returns full Finnhub response fields for downstream analysis:
+    - category, related (for contagion), datetime (for time-series)
+    """
     if not _token():
         return []
     try:
@@ -57,6 +61,10 @@ def fetch_macro_news(limit: int = 20) -> List[dict]:
                 "headline": it.get("headline", ""),
                 "summary": it.get("summary", ""),
                 "source": it.get("source", ""),
+                "category": it.get("category", ""),
+                "related": it.get("related", []),
+                "datetime": it.get("datetime", 0),
+                "url": it.get("url", ""),
             }
             for it in items
         ]
@@ -91,7 +99,11 @@ def fetch_economic_calendar(days_ahead: int = 3) -> List[dict]:
 # ═══════════════════════════════════════════════════════════════
 
 def fetch_ticker_news(ticker: str, days_back: int = 2, limit: int = 10) -> List[dict]:
-    """Fetch recent company news for a single ticker."""
+    """Fetch recent company news for a single ticker.
+
+    Returns full Finnhub response fields for downstream analysis:
+    - category (filter noise), related (contagion), datetime (time-series)
+    """
     if not _token():
         return []
     today = datetime.utcnow().date()
@@ -112,6 +124,10 @@ def fetch_ticker_news(ticker: str, days_back: int = 2, limit: int = 10) -> List[
                 "headline": it.get("headline", ""),
                 "summary": it.get("summary", ""),
                 "source": it.get("source", ""),
+                "category": it.get("category", ""),
+                "related": it.get("related", []),
+                "datetime": it.get("datetime", 0),
+                "url": it.get("url", ""),
             }
             for it in items
         ]

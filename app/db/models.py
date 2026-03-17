@@ -123,6 +123,13 @@ class TickerNewsLibrary(Base):
     Populated by pre_fetch_pipeline.py at 13:30 ET for all holdings,
     QC candidates, and ETF_TOP5 constituents.
     Read by cron_pipeline.py at 14:00 ET — no real-time API calls needed.
+
+    Phase 1 enhancements (2026-03-17):
+    - category: filter noise ("company news" vs "press release")
+    - related: contagion analysis (related tickers from Finnhub)
+    - datetime_utc: Unix timestamp for time-series clustering
+    - url: optional link to full article
+    - credibility: source trustworthiness score (0.0-1.0)
     """
     __tablename__ = "ticker_news_library"
 
@@ -135,6 +142,13 @@ class TickerNewsLibrary(Base):
     sentiment = Column(String(10), nullable=True)
     relevance = Column(String(15), nullable=True)
     is_hard_event = Column(Boolean, default=False)
+
+    # Phase 1 enhancements
+    category = Column(String(50), nullable=True)
+    related = Column(JSONB, nullable=True)  # List of related ticker symbols
+    datetime_utc = Column(Integer, nullable=True)  # Unix timestamp
+    url = Column(Text, nullable=True)
+    credibility = Column(Integer, nullable=True)  # 0-100 score
 
     created_at = Column(
         DateTime(timezone=True),

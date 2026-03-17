@@ -8,9 +8,10 @@ manual JSON parsing. Returns a Step1Output Pydantic object.
 
 import asyncio
 from datetime import date
-from typing import Dict, List, Any, Literal
+from typing import Dict, List, Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.pipeline.prompts import STEP1_SYSTEM
@@ -46,16 +47,83 @@ def _build_user_message(
     macro_news: List[dict],
     econ_calendar: List[dict],
     history_block: str,
+    qc_quant_context: str = "",
 ) -> str:
-    return (
+    msg = (
         f"=== TODAY'S MACRO NEWS ===\n"
         f"{_format_news(macro_news)}\n\n"
         f"=== ECONOMIC CALENDAR ===\n"
         f"{_format_calendar(econ_calendar)}\n\n"
         f"=== RECENT 5-DAY CONTEXT ===\n"
         f"{history_block or 'No historical context available'}\n\n"
-        f"Assess the current market regime."
     )
+
+    if qc_quant_context:
+        msg += f"=== QC QUANTITATIVE INDICATORS ===\n{qc_quant_context}\n\n"
+
+    msg += "Assess the current market regime."
+    return msg
+
+
+def get_qc_quantitative_context(db: Session) -> Optional[Dict[str, Any]]:
+    """Extract latest QC quantitative indicators from DailyHoldings.
+
+    Returns dict with: spy_vs_ma200, hyg_ief_ratio, breadth_pct, high_vol, portfolio_dd
+    Returns None if no recent data available.
+    """
+    from app.db.models import DailyHoldings
+    from sqlalchemy import desc
+
+    latest = db.query(DailyHoldings).order_by(desc(DailyHoldings.date)).first()
+    if not latest or not latest.payload:
+        return None
+
+    qc_detail = latest.payload.get("qc_regime_detail", {})
+    if not qc_detail:
+        return None
+
+    return {
+        "spy_vs_ma200": qc_detail.get("spy_vs_ma200", 1.0),
+        "spy_vs_ma50": qc_detail.get("spy_vs_ma50", 1.0),
+        "hyg_ief_ratio": qc_detail.get("hyg_ief_ratio", 1.0),
+        "breadth_pct": qc_detail.get("breadth_pct", 0.5),
+        "high_vol": qc_detail.get("high_vol", False),
+        "radar_warning": qc_detail.get("radar_warning", False),
+        "portfolio_dd": qc_detail.get("portfolio_dd", 0.0),
+    }
+
+
+def format_qc_quantitative_context(qc_data: Optional[Dict[str, Any]]) -> str:
+    """Format QC quantitative indicators into prompt-friendly text."""
+    if not qc_data:
+        return "(No QC quantitative data available)"
+
+    spy_ma200 = qc_data.get("spy_vs_ma200", 1.0)
+    spy_ma50 = qc_data.get("spy_vs_ma50", 1.0)
+    hyg_ief = qc_data.get("hyg_ief_ratio", 1.0)
+    breadth = qc_data.get("breadth_pct", 0.5)
+    high_vol = qc_data.get("high_vol", False)
+    radar = qc_data.get("radar_warning", False)
+    dd = qc_data.get("portfolio_dd", 0.0)
+
+    # Directional indicators
+    spy_direction = "above" if spy_ma200 > 1.0 else "below"
+    credit_status = "risk-on" if hyg_ief > 1.05 else "risk-off" if hyg_ief < 0.95 else "neutral"
+    vol_status = "elevated" if high_vol else "normal"
+
+    lines = [
+        f"- SPY vs 200MA: {spy_ma200:.2f} ({(spy_ma200-1)*100:+.1f}% {spy_direction})",
+        f"- SPY vs 50MA: {spy_ma50:.2f} ({(spy_ma50-1)*100:+.1f}%)",
+        f"- Credit markets: HYG/IEF = {hyg_ief:.3f} ({credit_status})",
+        f"- Market breadth: {breadth:.1%} of stocks above 200MA",
+        f"- Volatility: {vol_status}",
+        f"- Portfolio drawdown: {dd:.1%}",
+    ]
+
+    if radar:
+        lines.append("- ⚠ RADAR WARNING: Breadth or credit deterioration detected")
+
+    return "\n".join(lines)
 
 
 def format_macro_context(parsed: Dict[str, Any]) -> str:
@@ -86,6 +154,7 @@ async def run_macro_analysis(
     macro_news: List[dict] | None = None,
     econ_calendar: List[dict] | None = None,
     history_block: str = "",
+    db: Session | None = None,
 ) -> Step1Output:
     """Return a structured macro analysis grounded in real data.
 
@@ -101,10 +170,18 @@ async def run_macro_analysis(
             reasoning="Mock mode: no real API key configured.",
         )
 
+    # Phase 1: Get QC quantitative indicators if available
+    qc_quant = None
+    if db:
+        qc_quant = get_qc_quantitative_context(db)
+
+    qc_quant_context = format_qc_quantitative_context(qc_quant)
+
     user_msg = _build_user_message(
         macro_news or [],
         econ_calendar or [],
         history_block,
+        qc_quant_context,
     )
 
     from openai import AsyncOpenAI

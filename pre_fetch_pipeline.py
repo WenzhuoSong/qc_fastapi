@@ -44,6 +44,61 @@ BATCH_SIZE = 10
 PRE_FETCH_TIMEOUT = 600  # 10 minutes
 
 # ═══════════════════════════════════════════════════════════════
+# Source credibility scoring (Phase 1 enhancement)
+# ═══════════════════════════════════════════════════════════════
+
+SOURCE_CREDIBILITY = {
+    # Tier 1: Premium financial news (100)
+    "Bloomberg": 100,
+    "Reuters": 100,
+    "Wall Street Journal": 100,
+    "Financial Times": 100,
+    "WSJ": 100,
+
+    # Tier 2: Major business media (85)
+    "CNBC": 85,
+    "MarketWatch": 85,
+    "Barron's": 85,
+    "The Economist": 85,
+
+    # Tier 3: Financial blogs & analysis (60)
+    "Seeking Alpha": 60,
+    "Benzinga": 60,
+    "Motley Fool": 60,
+    "Zacks": 55,
+
+    # Tier 4: Press releases & company sources (40)
+    "PR Newswire": 40,
+    "Business Wire": 40,
+    "GlobeNewswire": 40,
+
+    # Default for unknown sources
+    "_DEFAULT": 30,
+}
+
+
+def get_source_credibility(source: str) -> int:
+    """Return credibility score (0-100) for a news source.
+
+    Higher score = more trustworthy. Used to weight news impact in LLM prompts.
+    """
+    if not source:
+        return SOURCE_CREDIBILITY["_DEFAULT"]
+
+    # Exact match
+    if source in SOURCE_CREDIBILITY:
+        return SOURCE_CREDIBILITY[source]
+
+    # Fuzzy match (case-insensitive substring)
+    source_lower = source.lower()
+    for key, score in SOURCE_CREDIBILITY.items():
+        if key != "_DEFAULT" and key.lower() in source_lower:
+            return score
+
+    return SOURCE_CREDIBILITY["_DEFAULT"]
+
+
+# ═══════════════════════════════════════════════════════════════
 # Pydantic models for Structured Outputs
 # ═══════════════════════════════════════════════════════════════
 
@@ -303,15 +358,24 @@ async def process_ticker(
     relevant_for_sector = []
     for item, summary_data in zip(new_headlines, summaries):
         try:
+            source = item.get("source", "")
+            credibility = get_source_credibility(source)
+
             db.add(TickerNewsLibrary(
                 ticker=ticker,
                 date=target_date,
                 headline=item.get("headline", ""),
-                source=item.get("source", ""),
+                source=source,
                 llm_summary=summary_data.get("summary", ""),
                 sentiment=summary_data.get("sentiment", "neutral"),
                 relevance=summary_data.get("relevance", "direct"),
                 is_hard_event=summary_data.get("is_hard_event", False),
+                # Phase 1 enhancements
+                category=item.get("category", ""),
+                related=item.get("related", []),
+                datetime_utc=item.get("datetime", 0),
+                url=item.get("url", ""),
+                credibility=credibility,
             ))
             db.flush()
             count += 1
@@ -322,6 +386,7 @@ async def process_ticker(
                     "summary": summary_data.get("summary", ""),
                     "sentiment": summary_data.get("sentiment", "neutral"),
                     "relevance": summary_data.get("relevance", "direct"),
+                    "credibility": credibility,  # Pass to sector aggregation
                 })
         except Exception:
             db.rollback()

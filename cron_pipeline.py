@@ -194,6 +194,7 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                 macro_news=macro_news,
                 econ_calendar=econ_calendar,
                 history_block=history_block,
+                db=db,  # Phase 1: Pass db to get QC quantitative indicators
             )
             macro_parsed = step1_result.model_dump()
 
