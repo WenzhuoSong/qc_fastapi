@@ -1,17 +1,18 @@
 """
 ORM Models
 
-- DailyDecision:      Checkpoint state machine for the LLM research pipeline
-- DailyHoldings:      Intraday holdings snapshot reported by QuantConnect
-- DailyNewsDigest:    Structured macro/micro summary stored after each pipeline run
-- DecisionLog:        Full decision audit trail for post-hoc analysis
-- TickerNewsLibrary:  Pre-fetched per-ticker news with LLM summaries and sentiment
-- SectorNewsLibrary:  Aggregated sector-level summaries from constituent ticker news
+- DailyDecision:       Checkpoint state machine for the LLM research pipeline
+- DailyHoldings:       Intraday holdings snapshot reported by QuantConnect
+- DailyNewsDigest:     Structured macro/micro summary stored after each pipeline run
+- DecisionLog:         Full decision audit trail for post-hoc analysis
+- TickerNewsLibrary:   Pre-fetched per-ticker news with LLM summaries and sentiment
+- SectorNewsLibrary:   Aggregated sector-level summaries from constituent ticker news
+- EventTransmission:   Phase 2 - Macro event → sector transmission vectors (causal modeling)
 """
 
 import datetime
 import uuid
-from sqlalchemy import Column, Date, String, Text, DateTime, Boolean, Integer, UniqueConstraint, func
+from sqlalchemy import Column, Date, String, Text, DateTime, Boolean, Integer, Float, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.db.database import Base
@@ -192,3 +193,47 @@ class SectorNewsLibrary(Base):
 
     def __repr__(self) -> str:
         return f"<SectorNews {self.sector} {self.date} outlook={self.outlook}>"
+
+
+class EventTransmission(Base):
+    """Phase 2: Event transmission vectors — macro event → sector impact mapping.
+
+    Records canonical transmission patterns for each macro event detected by Step 1.
+    Used to provide sector priors to Step 2, then validated via backtesting.
+
+    Example:
+        Event: "Strait of Hormuz closure"
+        Transmission: {"XLE": 0.95, "XLY": -0.75, "XLI": 0.70, ...}
+
+    The transmission_vector maps sector ETF symbols to impact strength:
+        1.0  = Full direct beneficiary (e.g., oil spike → XLE)
+        0.5-0.8 = Strong secondary effect
+        0.2-0.4 = Weak indirect effect
+        0.0  = Neutral
+        -0.2 to -1.0 = Negative impact (losers)
+
+    Post-hoc validation:
+        - accuracy_score: Correlation between predicted transmission and actual sector returns
+        - validated: True after backtesting completes
+    """
+    __tablename__ = "event_transmission"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    event_id = Column(String(100), unique=True, nullable=False, index=True)
+    event_type = Column(String(50), index=True)  # supply_shock, demand_shock, rate_shock, etc.
+    event_description = Column(Text, nullable=True)
+    confidence = Column(Integer, nullable=True)  # 0-100 from Step 1
+    transmission_vector = Column(JSONB, nullable=True)  # {sector: strength, ...}
+
+    # Backtesting validation
+    validated = Column(Boolean, default=False)
+    accuracy_score = Column(Float, nullable=True)  # 0.0-1.0 correlation
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<EventTransmission {self.date} {self.event_id} validated={self.validated}>"
