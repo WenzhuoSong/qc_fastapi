@@ -137,7 +137,7 @@ class TestEventTypeDetection:
 
     def test_detect_supply_shock(self):
         """Should detect supply_shock_oil event type."""
-        key_events = ["Hormuz closure", "OPEC production cut"]
+        key_events = ["Strait of Hormuz closure", "Oil supply disruption"]
         event_type = detect_event_type(key_events)
 
         assert event_type == "supply_shock_oil"
