@@ -23,6 +23,10 @@ class Step1Output(BaseModel):
     summary: str = Field(description="One sentence macro summary, 10-30 words")
     key_events: List[str] = Field(description="3-5 specific factual events from today's news")
     reasoning: str = Field(description="2-3 sentences explaining why this regime was chosen")
+    transmission_vector: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Phase 2: Sector transmission vector derived from key_events"
+    )
 
 
 def _format_news(articles: List[dict]) -> str:
@@ -233,5 +237,14 @@ async def run_macro_analysis(
 
     if not result.summary and result.key_events:
         result.summary = f"{result.regime}: {', '.join(result.key_events[:2])}"
+
+    # Phase 2: Generate transmission vector from key_events
+    from app.pipeline.transmission_rules import match_event_to_pattern
+
+    transmission = match_event_to_pattern(
+        key_events=result.key_events,
+        reasoning=result.reasoning
+    )
+    result.transmission_vector = transmission if transmission else None
 
     return result

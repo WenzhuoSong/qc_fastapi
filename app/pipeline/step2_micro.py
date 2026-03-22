@@ -484,9 +484,12 @@ async def run_micro_scoring(
     sector_context: str = "(No sector data available)",
     earnings_flags: Optional[Dict[str, bool]] = None,
     hard_flags: Optional[Dict[str, List[str]]] = None,
+    transmission_vector: Optional[Dict[str, float]] = None,
 ) -> str:
     """
     Score sector ETFs given macro backdrop, holdings, dual-layer news, earnings.
+
+    Phase 2 enhancement: transmission_vector provides macro-level priors for sectors.
 
     Three-layer defence:
       Layer 1 -- STEP2_SYSTEM prompt with transmission rules
@@ -518,9 +521,14 @@ async def run_micro_scoring(
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
+    # Phase 2: Format transmission vector as prior guidance
+    from app.pipeline.transmission_rules import format_transmission_context
+    transmission_context = format_transmission_context(transmission_vector or {})
+
     user_prompt = f"""
 {macro_context}
 
+{transmission_context}
 === CURRENT HOLDINGS ===
 {holdings_str}
 

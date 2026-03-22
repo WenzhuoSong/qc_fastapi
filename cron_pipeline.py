@@ -248,6 +248,36 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
             digest.key_events = step1_result.key_events
             db.commit()
 
+            # ── Phase 2: Store transmission vector to event_transmission table ──
+            if step1_result.transmission_vector:
+                from app.db.models import EventTransmission
+                from app.pipeline.transmission_rules import detect_event_type
+
+                event_id = f"macro_{target_date.isoformat()}"
+                event_type = detect_event_type(step1_result.key_events, step1_result.reasoning)
+
+                # Check if record already exists
+                existing = db.query(EventTransmission).filter_by(event_id=event_id).first()
+                if existing:
+                    # Update existing record
+                    existing.date = target_date
+                    existing.event_type = event_type
+                    existing.event_description = step1_result.summary
+                    existing.confidence = step1_result.confidence
+                    existing.transmission_vector = step1_result.transmission_vector
+                else:
+                    # Create new record
+                    db.add(EventTransmission(
+                        date=target_date,
+                        event_id=event_id,
+                        event_type=event_type,
+                        event_description=step1_result.summary,
+                        confidence=step1_result.confidence,
+                        transmission_vector=step1_result.transmission_vector,
+                    ))
+                db.commit()
+                print(f"[{target_date}]   Transmission vector stored: {event_type}")
+
             print(f"[{target_date}] Step 1 done.")
             print(f"[{target_date}]   Regime: {step1_result.regime} "
                   f"(confidence: {step1_result.confidence})")
@@ -303,6 +333,12 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                 upcoming = [t for t, v in earnings_flags.items() if v]
                 print(f"[{target_date}]   Earnings upcoming: {upcoming or 'none'}")
 
+            # Phase 2: Extract transmission vector from macro_parsed
+            transmission = macro_parsed.get("transmission_vector", {}) if macro_parsed else {}
+            if transmission:
+                top_impacts = sorted(transmission.items(), key=lambda x: -abs(x[1]))[:3]
+                print(f"[{target_date}]   Transmission vector: {', '.join(f'{s}={v:+.2f}' for s, v in top_impacts)}")
+
             result = await run_micro_scoring(
                 target_date,
                 macro_context_str,
@@ -311,6 +347,7 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                 sector_context=sector_context_str,
                 earnings_flags=earnings_flags,
                 hard_flags=hard_flags,
+                transmission_vector=transmission,
             )
             row.step2_micro_result = result
             row.status = "STEP2_DONE"
