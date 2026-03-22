@@ -92,7 +92,13 @@ All `/api/v1/` endpoints (except `/health/`) require authentication via `app/cor
 
 ### Legacy Endpoints
 
-`crew.py` and `tasks.py` in `app/api/v1/endpoints/` are scheduled for removal. The `app/services/` directory contains legacy CrewAI code.
+**Removed 2026-03-22:** CrewAI endpoints (`/crew/`, `/tasks/`) and `app/services/` directory cleaned up before Phase 2. The following files were deleted:
+- `example_usage.py` (144 lines)
+- `app/services/` (agents.py, crew_service.py, tasks_def.py - ~300 lines)
+- `app/api/v1/endpoints/crew.py` (88 lines)
+- `app/api/v1/endpoints/tasks.py` (90 lines)
+
+Total: ~600 lines of unused CrewAI code removed.
 
 ### Prompt Engineering (`app/pipeline/step2_micro.py`)
 

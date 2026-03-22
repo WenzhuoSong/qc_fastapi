@@ -9,48 +9,6 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
 
-# ── Crew ─────────────────────────────────────────────────────────────
-
-class AgentRequest(BaseModel):
-    topic: str
-    agents_config: Optional[List[Dict[str, Any]]] = None
-    tasks_config: Optional[List[Dict[str, Any]]] = None
-
-
-class AgentResponse(BaseModel):
-    success: bool
-    result: Optional[str] = None
-    error: Optional[str] = None
-    execution_time: Optional[float] = None
-
-
-class CrewInfoResponse(BaseModel):
-    name: str
-    description: str
-    agents: List[Dict[str, Any]]
-    tasks: List[Dict[str, Any]]
-
-
-# ── Task Management ──────────────────────────────────────────────────
-
-class TaskCreateRequest(BaseModel):
-    name: str
-    description: str
-    agent_role: str
-    expected_output: Optional[str] = None
-    context: Optional[Dict[str, Any]] = None
-
-
-class TaskResponse(BaseModel):
-    id: str
-    name: str
-    description: str
-    status: str
-    created_at: str
-    completed_at: Optional[str] = None
-    result: Optional[str] = None
-
-
 # ── Allocation (V3.1 Chronos) ───────────────────────────────────────
 
 class AllocationResponse(BaseModel):
