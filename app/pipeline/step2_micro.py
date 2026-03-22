@@ -137,6 +137,15 @@ After applying macro floors/ceilings, you may adjust by +/-2 based on
 sector-specific news. You CANNOT violate a macro floor or ceiling by
 more than 1 point.
 
+NEWS CREDIBILITY WEIGHTING (Phase 1):
+- [credible:85+] = Tier-1 source (Bloomberg, Reuters, WSJ) — **trust fully**, prioritize
+- [low-cred:<40] = Press release / unknown source — treat as **noise** unless confirmed
+- [breaking] = News within last 6 hours — immediate impact, high weight
+- [category] = Event type (e.g., 'earnings', 'FDA', 'merger') — context for assessment
+- **Bold text** = High-credibility news — your primary signals
+- 🔗 CONTAGION RISK = Related tickers affected by hard events — expand impact assessment
+- When news conflicts: HIGH-CREDIBILITY SOURCE ALWAYS WINS over low-credibility speculation
+
 STEP 3: Hard event penalty
 If a holding ticker has a HARD EVENT flag (marked with red circles),
 its primary sector ceiling = 4.
@@ -246,6 +255,7 @@ def build_news_context_from_db(
 
     Filters out not_relevant items and tags relevance level.
     Hard events are prominently flagged for sector-level impact.
+    Phase 1 enhancement: Include credibility scores, event categories, and recency.
     """
     from app.db.models import TickerNewsLibrary
     from app.constants import TICKER_TO_ETFS
@@ -260,7 +270,10 @@ def build_news_context_from_db(
                 TickerNewsLibrary.ticker == ticker,
                 TickerNewsLibrary.date >= cutoff,
             )
-            .order_by(TickerNewsLibrary.date.desc())
+            .order_by(
+                TickerNewsLibrary.credibility.desc().nullslast(),
+                TickerNewsLibrary.date.desc()
+            )
             .limit(5)
             .all()
         )
@@ -282,9 +295,33 @@ def build_news_context_from_db(
                 tags.append(r.sentiment)
             if r.relevance and r.relevance != "direct":
                 tags.append(r.relevance)
+
+            # Phase 1: Credibility tagging
+            if r.credibility:
+                if r.credibility >= 85:
+                    tags.append(f"credible:{r.credibility}")
+                elif r.credibility <= 40:
+                    tags.append(f"low-cred:{r.credibility}")
+
+            # Phase 1: Event type categorization
+            if r.category and r.category not in ("company news", "general"):
+                tags.append(r.category)
+
+            # Phase 1: Recency marker
+            if r.datetime_utc:
+                from datetime import datetime
+                age_hours = (datetime.now().timestamp() - r.datetime_utc) / 3600
+                if age_hours < 6:
+                    tags.append("breaking")
+
             tag_str = f"[{', '.join(tags)}]" if tags else ""
             summary = r.llm_summary or r.headline[:80]
-            lines.append(f"  - {tag_str} {summary}")
+
+            # Phase 1: Emphasize high-credibility news
+            if r.credibility and r.credibility >= 85:
+                lines.append(f"  - **{tag_str} {summary}**")
+            else:
+                lines.append(f"  - {tag_str} {summary}")
 
         block = f"**{ticker}**:\n" + "\n".join(lines)
 
@@ -299,14 +336,25 @@ def build_news_context_from_db(
                 f"{hard_events[0].llm_summary}"
             )
 
+            # Phase 1: Contagion analysis from related tickers
+            related_tickers = set()
+            for he in hard_events:
+                if he.related:
+                    related_tickers.update([t for t in he.related if t in tickers])
+            if related_tickers:
+                block += f"\n  🔗 CONTAGION RISK: {', '.join(sorted(related_tickers)[:5])}"
+
         parts.append(block)
 
     return "\n\n".join(parts) if parts else "(No news data available)"
 
 
 def build_sector_context_from_db(db: Session, target_date: date) -> str:
-    """Read sector_news_library and format sector outlooks for LLM."""
-    from app.db.models import SectorNewsLibrary
+    """Read sector_news_library and format sector outlooks for LLM.
+
+    Phase 1 enhancement: Include average credibility of contributing news.
+    """
+    from app.db.models import SectorNewsLibrary, TickerNewsLibrary
 
     parts = []
     for etf in ETF_TOP5:
@@ -323,8 +371,31 @@ def build_sector_context_from_db(db: Session, target_date: date) -> str:
             ", ".join(row.contributing_tickers)
             if row.contributing_tickers else "N/A"
         )
+
+        # Phase 1: Calculate average credibility of contributing news
+        avg_credibility = None
+        if row.contributing_tickers:
+            cred_values = []
+            for ticker in row.contributing_tickers:
+                ticker_news = db.query(TickerNewsLibrary).filter(
+                    TickerNewsLibrary.ticker == ticker,
+                    TickerNewsLibrary.date == target_date,
+                    TickerNewsLibrary.credibility.isnot(None)
+                ).all()
+                cred_values.extend([n.credibility for n in ticker_news])
+
+            if cred_values:
+                avg_credibility = sum(cred_values) / len(cred_values)
+
+        cred_tag = ""
+        if avg_credibility:
+            if avg_credibility >= 75:
+                cred_tag = f" [high-cred:{avg_credibility:.0f}]"
+            elif avg_credibility <= 50:
+                cred_tag = f" [low-cred:{avg_credibility:.0f}]"
+
         parts.append(
-            f"**{etf}** [{row.outlook}] ({row.sentiment}): "
+            f"**{etf}** [{row.outlook}] ({row.sentiment}){cred_tag}: "
             f"{row.sector_summary}\n"
             f"  Themes: {themes} | Sources: {tickers} ({row.news_count} items)"
         )

@@ -94,14 +94,50 @@ All `/api/v1/` endpoints (except `/health/`) require authentication via `app/cor
 
 `crew.py` and `tasks.py` in `app/api/v1/endpoints/` are scheduled for removal. The `app/services/` directory contains legacy CrewAI code.
 
-### Prompt Engineering (`app/pipeline/prompts.py`)
+### Prompt Engineering (`app/pipeline/step2_micro.py`)
 
-All LLM prompts are centralized in `prompts.py` for easy A/B testing. Critical:
-- **Macro Event Transmission Rules** in `MICRO_USER` — A lookup table that maps macro event categories (e.g., "Energy supply shock", "Geopolitical conflict") to mandatory sector score constraints. When modifying, ensure:
-  - Constraints are **bidirectional** (both floor `>=` and ceiling `<=` where logical)
-  - Multiple categories can apply simultaneously and should combine logically
-  - Examples in "Trigger Examples" column must match phrasing from Step 1's `key_events`
-- If Step 2 scores seem detached from Step 1 regime, check if a new macro event type needs a rule entry.
+Step 2 scoring uses inline `STEP2_SYSTEM` prompt with transmission rules. Critical:
+- **Macro Event Transmission Rules** — Mandatory floors/ceilings mapping macro events to sector impacts. When modifying:
+  - Constraints are **bidirectional** (both floor `>=` and ceiling `<=`)
+  - Multiple rules can apply simultaneously
+  - Trigger keywords must match Step 1's `key_events`
+- **Phase 1 Credibility Weighting** (2026-03-22) — News credibility guides LLM attention:
+  - High-credibility sources (Bloomberg=100, Reuters=100) emphasized with bold markdown
+  - Low-credibility sources (<40) tagged to reduce noise
+  - Prompt instructs: "HIGH-CREDIBILITY SOURCE ALWAYS WINS" when news conflicts
+
+### Phase 1 Implementation (2026-03-17 to 2026-03-22)
+
+**Objective**: Increase information density without adding API calls — leverage existing Finnhub fields.
+
+**Enhancements**:
+1. **Database Schema** — Added 5 columns to `ticker_news_library`:
+   - `category` (VARCHAR50) — Event type classification
+   - `related` (JSONB) — Related tickers for contagion analysis
+   - `datetime_utc` (INTEGER) — Precise timestamp for recency
+   - `url` (TEXT) — Source link
+   - `credibility` (INTEGER 0-100) — Source trustworthiness
+
+2. **Data Collection** (`pre_fetch_pipeline.py`):
+   - Source credibility scoring: Bloomberg=100, Reuters=100, Seeking Alpha=60, PR=40
+   - Sector aggregation prioritizes high-credibility (sorted by cred)
+   - Displays credibility in LLM prompt: `(cred:100)`
+
+3. **Step 1 Integration** (`step1_macro.py`):
+   - Extracts QC quantitative indicators from `DailyHoldings.payload.qc_regime_detail`
+   - Cross-validates news vs technicals (SPY/MA200, HYG/IEF, breadth)
+   - 4 cross-check rules prevent false signals
+
+4. **Step 2 Enhancement** (`step2_micro.py`):
+   - News sorted by credibility (desc) then recency
+   - High-cred news (≥85) in **bold**, low-cred (≤40) tagged `[low-cred:XX]`
+   - Recency: `[breaking]` for <6h news
+   - Event categories: `[earnings]`, `[FDA]`, `[merger]`
+   - Contagion: 🔗 CONTAGION RISK from related tickers
+   - Sector context: `[high-cred:XX]` or `[low-cred:XX]` average
+   - Explicit prompt rule: "HIGH-CREDIBILITY SOURCE ALWAYS WINS"
+
+**Expected Impact**: Regime accuracy +10-15%, reduce noise over-reaction
 
 ### Deployment
 

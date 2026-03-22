@@ -268,8 +268,9 @@ async def summarize_sector_news(
 ) -> dict:
     """Synthesize a sector outlook from aggregated ticker news.
 
-    news_list items have keys: ticker, summary, sentiment, relevance.
+    news_list items have keys: ticker, summary, sentiment, relevance, credibility.
     Returns {sector_sentiment, outlook, summary, key_themes}.
+    Phase 1 enhancement: Prioritize high-credibility news in aggregation.
     """
     if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-test"):
         return {
@@ -279,9 +280,12 @@ async def summarize_sector_news(
             "key_themes": ["mock"],
         }
 
+    # Phase 1: Sort by credibility, prioritize high-credibility sources
+    sorted_news = sorted(news_list, key=lambda x: x.get('credibility', 0), reverse=True)
+
     news_block = "\n".join(
-        f"- [{item['ticker']}] ({item['sentiment']}) {item['summary']}"
-        for item in news_list[:30]
+        f"- [{item['ticker']}] ({item['sentiment']}, cred:{item.get('credibility', '?')}) {item['summary']}"
+        for item in sorted_news[:30]
     )
 
     from openai import AsyncOpenAI
