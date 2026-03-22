@@ -184,13 +184,17 @@ class TestTransmissionFormatting:
         assert formatted == ""
 
     def test_format_includes_instructions(self):
-        """Formatted output should include usage instructions."""
+        """Formatted output should include usage instructions and mapping rules."""
         transmission = {"XLE": 0.95, "XLY": -0.75}
         formatted = format_transmission_context(transmission)
 
         assert "MACRO EVENT TRANSMISSION" in formatted
-        assert "STARTING POINTS" in formatted
-        assert "ticker wins" in formatted.lower()
+        # Check for Option A improvements
+        assert "TRANSMISSION STRENGTH → SCORE INTERPRETATION" in formatted
+        assert "CRITICAL RULES" in formatted
+        assert "0.7-1.0  → Target score 8-10" in formatted
+        assert "sectors WITH Macro Rules" in formatted
+        assert "EXAMPLE:" in formatted
 
 
 class TestCanonicalPatternDefinitions:
