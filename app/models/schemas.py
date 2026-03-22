@@ -22,6 +22,7 @@ class AllocationResponse(BaseModel):
     regime: Optional[str] = None
     confidence: Optional[int] = None
     regime_override: Optional[bool] = None
+    transmission_vector: Optional[Dict[str, float]] = None  # Phase 2 Week 4
     message: Optional[str] = None
 
 

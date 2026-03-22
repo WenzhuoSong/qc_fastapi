@@ -32,9 +32,10 @@ CANONICAL_TRANSMISSIONS = {
     "supply_shock_oil": {
         "description": "Oil/energy supply disruption (embargo, OPEC cut, Hormuz closure)",
         "keywords": [
-            "oil spike", "oil surge", "crude", "$200 oil",
-            "hormuz", "strait", "iran", "embargo",
-            "opec cut", "supply disruption", "saudi", "energy crisis"
+            "oil spike", "oil surge", "crude", "$200 oil", "wti", "brent",
+            "hormuz", "strait", "iran", "embargo", "middle east",
+            "opec cut", "supply disruption", "saudi", "energy crisis",
+            "natural gas", "lng", "pipeline", "refinery"
         ],
         "vector": {
             "XLE": 0.95,   # Energy producers WIN (direct beneficiary)
@@ -55,8 +56,9 @@ CANONICAL_TRANSMISSIONS = {
         "description": "War, military conflict, geopolitical crisis",
         "keywords": [
             "war", "invasion", "attack", "missile", "bombing", "military strike",
-            "iran", "russia", "ukraine", "israel", "hamas",
-            "sanctions", "conflict", "escalation"
+            "iran", "russia", "ukraine", "israel", "hamas", "gaza", "hezbollah",
+            "china", "taiwan", "south china sea", "north korea",
+            "sanctions", "conflict", "escalation", "drone strike", "cyber attack"
         ],
         "vector": {
             "XLI": 0.90,   # Industrials WIN (defense contractors)
@@ -77,8 +79,10 @@ CANONICAL_TRANSMISSIONS = {
         "description": "Interest rate spike, Fed hawkish, yields surge",
         "keywords": [
             "rate hike", "fed hawkish", "yields surge", "higher for longer",
-            "real rates", "australia hike", "10-year yield",
-            "bond selloff", "tightening"
+            "real rates", "australia hike", "10-year yield", "30-year yield",
+            "bond selloff", "tightening", "quantitative tightening", "qt",
+            "inflation", "cpi", "pce", "core inflation", "sticky inflation",
+            "wage growth", "powell hawkish", "fomc", "restrictive policy"
         ],
         "vector": {
             "XLF": 0.70,   # Financials WIN (banks benefit from higher rates)
@@ -122,7 +126,9 @@ CANONICAL_TRANSMISSIONS = {
         "keywords": [
             "recession", "gdp miss", "pmi contraction", "mass layoffs",
             "demand destruction", "hard landing", "unemployment spike",
-            "consumer collapse", "retail sales miss"
+            "consumer collapse", "retail sales miss", "earnings recession",
+            "profit warning", "guidance cut", "consumer spending", "weak demand",
+            "ism", "manufacturing", "services pmi", "jobless claims"
         ],
         "vector": {
             "XLV": 0.75,   # Healthcare WIN (defensive)
@@ -143,7 +149,9 @@ CANONICAL_TRANSMISSIONS = {
         "description": "Fed dovish pivot, rate cuts, QE, liquidity injection",
         "keywords": [
             "rate cut", "qe", "dovish pivot", "liquidity injection",
-            "powell dovish", "fed easing", "stimulus", "emergency cut"
+            "powell dovish", "fed easing", "stimulus", "emergency cut",
+            "soft landing", "pause", "disinflation", "inflation cooling",
+            "balance sheet expansion", "repo", "bank term funding"
         ],
         "vector": {
             "XLRE": 0.80,  # Real Estate WIN (duration assets rally)

@@ -145,6 +145,56 @@ Step 2 scoring uses inline `STEP2_SYSTEM` prompt with transmission rules. Critic
 
 **Expected Impact**: Regime accuracy +10-15%, reduce noise over-reaction
 
+### Phase 2 Implementation (2026-03-22) — Event Chain Modeling ✅ COMPLETE
+
+**Objective**: Model causal transmission from macro events to sector impacts, providing structured priors for Step 2 scoring.
+
+**Implementation (4 Weeks)**:
+
+**Week 1 - Infrastructure** (DONE):
+- Created `event_transmission` table with JSONB `transmission_vector` field
+- Created `transmission_rules.py` with 6 canonical patterns
+- Implemented `match_event_to_pattern()` keyword matcher
+
+**Week 2 - Integration** (DONE):
+- Step 1 generates transmission vector from `key_events`
+- Pipeline stores transmission to DB after Step 1
+- Step 2 receives transmission as starting point via prompt injection
+- Verified on 2026-03-20 Iran war scenario: 7/7 sectors aligned
+
+**Week 3 - Backtesting** (DONE):
+- Created `backtest_transmission.py` validation script
+- Fetches actual sector returns from Yahoo Finance (yfinance)
+- Calculates Pearson correlation: prediction vs actual
+- Updates `accuracy_score` in `event_transmission` table
+- CLI: `python backtest_transmission.py [date] --days 5 --force`
+
+**Week 4 - Monitoring & Optimization** (DONE):
+- API Integration: `/allocation` now returns `transmission_vector` for QuantConnect
+- Monitoring Endpoint: `/api/v1/transmission/` displays causal chain (macro → transmission → scores → weights)
+- Keyword Expansion: Added inflation, China, earnings recession, natural gas, Taiwan, CPI/PCE, wage growth
+- Patterns: 6 canonical patterns cover oil shocks, war, rate shocks, credit stress, recession, Fed easing
+
+**Key Files**:
+- `app/pipeline/transmission_rules.py` — 6 canonical patterns with keyword matching
+- `app/pipeline/step1_macro.py` — Generates transmission vector
+- `app/pipeline/step2_micro.py` — Receives transmission as prior
+- `cron_pipeline.py` — Stores transmission to DB
+- `backtest_transmission.py` — Validation script
+- `verify_phase2.py` — Integration verification
+- `app/api/v1/endpoints/transmission.py` — Monitoring endpoint
+- `app/db/models.py` — EventTransmission model
+
+**Transmission Patterns**:
+1. `supply_shock_oil` — Oil embargos, OPEC cuts, Hormuz closure → XLE ↑↑, XLY ↓↓
+2. `war_geopolitical` — War, sanctions, conflict → XLI ↑↑ (defense), XLY ↓↓
+3. `rate_shock_hawkish` — Fed hawkish, yields surge → XLF ↑, XLRE ↓↓↓, XLK ↓↓
+4. `risk_off_credit_stress` — Credit crisis, VIX spike → XLV/XLP/XLU ↑↑, XLY/XLK ↓↓
+5. `recession_demand_collapse` — Recession, demand destruction → XLV/XLP ↑, XLY/XLI/XLE ↓↓
+6. `fed_dovish_easing` — Rate cuts, QE → XLRE/XLK/XLU ↑↑, XLE ↓
+
+**Expected Impact**: +15-20% regime accuracy, structured causal reasoning, backtestable predictions
+
 ### Deployment
 
 Deployed on Railway with 3 services: PostgreSQL, web service (FastAPI), and 2 cron jobs. See `railway.toml` and `Dockerfile`. The `cron_pipeline.py` patches `socket.getaddrinfo` at startup to force IPv4 due to Railway cron container IPv6 issues.

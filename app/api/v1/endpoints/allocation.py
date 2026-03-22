@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import verify_token_flexible
 from app.db.database import get_db
-from app.db.models import DailyDecision, DailyNewsDigest, DecisionLog
+from app.db.models import DailyDecision, DailyNewsDigest, DecisionLog, EventTransmission
 from app.models.schemas import AllocationResponse
 
 router = APIRouter()
@@ -59,6 +59,7 @@ async def get_allocation(
     if today_row:
         log = db.query(DecisionLog).filter_by(date=today).first()
         digest = db.query(DailyNewsDigest).filter_by(date=today).first()
+        transmission = db.query(EventTransmission).filter_by(date=today).first()
         return AllocationResponse(
             date=str(today_row.date),
             status=today_row.status,
@@ -69,6 +70,7 @@ async def get_allocation(
             regime=log.ai_regime if log else None,
             confidence=log.confidence if log else None,
             regime_override=log.regime_override if log else None,
+            transmission_vector=transmission.transmission_vector if transmission else None,
         )
 
     latest_row = (
@@ -81,6 +83,7 @@ async def get_allocation(
     if latest_row:
         log = db.query(DecisionLog).filter_by(date=latest_row.date).first()
         digest = db.query(DailyNewsDigest).filter_by(date=latest_row.date).first()
+        transmission = db.query(EventTransmission).filter_by(date=latest_row.date).first()
         return AllocationResponse(
             date=str(latest_row.date),
             status=latest_row.status,
@@ -91,6 +94,7 @@ async def get_allocation(
             regime=log.ai_regime if log else None,
             confidence=log.confidence if log else None,
             regime_override=log.regime_override if log else None,
+            transmission_vector=transmission.transmission_vector if transmission else None,
             message=f"No READY data for {today}, using {latest_row.date}",
         )
 
