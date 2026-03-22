@@ -219,15 +219,33 @@ def match_event_to_pattern(
     if len(matches) == 1:
         return matches[0][2]
 
-    # Multiple matches: blend by summing and clipping to [-1.0, 1.0]
-    blended: Dict[str, float] = {}
-    for pattern_name, score, vector in matches:
-        for sector, strength in vector.items():
-            blended[sector] = blended.get(sector, 0.0) + strength
+    # Multiple matches: blend using diminishing returns formula
+    # Formula: s1 + s2 - abs(s1 * s2) accounts for overlap between patterns
+    # This prevents over-aggressive summing (e.g., 0.6 + 0.5 → 0.8 instead of 1.1)
 
-    # Clip to valid range
-    for sector in blended:
-        blended[sector] = max(-1.0, min(1.0, blended[sector]))
+    blended: Dict[str, float] = {}
+
+    # Get all sectors mentioned in any pattern
+    all_sectors = set()
+    for _, _, vector in matches:
+        all_sectors.update(vector.keys())
+
+    for sector in all_sectors:
+        # Collect all strength values for this sector across patterns
+        strengths = [vector.get(sector, 0.0) for _, _, vector in matches]
+
+        # Apply diminishing returns formula iteratively
+        combined = strengths[0]
+        for strength in strengths[1:]:
+            # For same-sign values: s1 + s2 - abs(s1 * s2)
+            # This creates diminishing returns as values add up
+            if combined * strength >= 0:  # Same sign or one is zero
+                combined = combined + strength - abs(combined * strength)
+            else:  # Opposite signs: let them partially cancel
+                combined = combined + strength
+
+        # Clip to valid range [-1.0, 1.0]
+        blended[sector] = max(-1.0, min(1.0, combined))
 
     return blended
 
@@ -285,6 +303,22 @@ def format_transmission_context(transmission_vector: Dict[str, float]) -> str:
         "## MACRO EVENT TRANSMISSION (Phase 2 Prior)\n"
         "The following sector biases are derived from macro event analysis:\n"
         + "\n".join(trans_lines) + "\n\n"
-        "INSTRUCTION: Use these as STARTING POINTS, then refine with ticker-level news.\n"
-        "If ticker news strongly contradicts transmission (high credibility), ticker wins.\n\n"
+        "TRANSMISSION STRENGTH → SCORE INTERPRETATION:\n"
+        "  • 0.7-1.0  → Target score 8-10 (strong positive signal)\n"
+        "  • 0.4-0.7  → Target score 6-8 (moderate positive signal)\n"
+        "  • 0.2-0.4  → Target score 5-7 (weak positive signal)\n"
+        "  • -0.4 to -0.2 → Target score 3-5 (weak negative signal)\n"
+        "  • -0.7 to -0.4 → Target score 2-4 (moderate negative signal)\n"
+        "  • -1.0 to -0.7 → Target score 1-3 (strong negative signal)\n\n"
+        "CRITICAL RULES:\n"
+        "1. For sectors WITH Macro Rules (e.g., XLE ≥ 7): Transmission refines WITHIN Rule bounds\n"
+        "2. For sectors WITHOUT Macro Rules: Transmission is PRIMARY guide for scoring\n"
+        "3. Ticker-level news can override transmission ONLY if:\n"
+        "   - News has high credibility (≥85)\n"
+        "   - Multiple high-quality sources confirm the same direction\n"
+        "   - Contradiction is fundamental (e.g., \"all materials stocks missing earnings\")\n\n"
+        "EXAMPLE:\n"
+        "  XLB transmission=0.80 → Target score 8-9\n"
+        "  But if ticker news shows \"trade slowdown hurting materials demand\" (cred:95)\n"
+        "  → Can adjust to 6-7, but should NOT drop to 3 unless evidence is overwhelming\n\n"
     )
