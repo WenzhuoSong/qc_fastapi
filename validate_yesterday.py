@@ -61,9 +61,19 @@ def get_spy_return(prediction_date: date) -> Optional[float]:
             print(f"⚠️  Insufficient SPY data for {prediction_date}")
             return None
 
+        # Handle different yfinance data structures
+        # Single ticker can return either 'Close' or ('Close', 'SPY') column
+        if 'Close' in spy.columns:
+            close_col = spy['Close']
+        elif ('Close', 'SPY') in spy.columns:
+            close_col = spy[('Close', 'SPY')]
+        else:
+            print(f"⚠️  Unexpected SPY data structure: {spy.columns}")
+            return None
+
         # Get closing prices
-        close_t = float(spy['Close'].iloc[0])
-        close_t1 = float(spy['Close'].iloc[1])
+        close_t = float(close_col.iloc[0])
+        close_t1 = float(close_col.iloc[1])
 
         return_1d = (close_t1 - close_t) / close_t
 
