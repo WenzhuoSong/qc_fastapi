@@ -23,6 +23,10 @@ class AllocationResponse(BaseModel):
     confidence: Optional[int] = None
     regime_override: Optional[bool] = None
     transmission_vector: Optional[Dict[str, float]] = None  # Phase 2 Week 4
+    # Phase 3a: Event direction analysis
+    net_escalation_score: Optional[float] = None
+    regime_phase: Optional[str] = None
+    event_direction_reasoning: Optional[str] = None
     message: Optional[str] = None
 
 

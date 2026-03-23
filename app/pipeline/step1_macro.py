@@ -28,6 +28,21 @@ class Step1Output(BaseModel):
         description="Phase 2: Sector transmission vector derived from key_events"
     )
 
+    # Phase 3a: Event direction analysis
+    net_escalation_score: Optional[float] = Field(
+        default=None,
+        ge=-1.0, le=1.0,
+        description="Phase 3a: Net escalation score from event direction analysis"
+    )
+    regime_phase: Optional[str] = Field(
+        default=None,
+        description="Phase 3a: Regime evolution phase (Building/Peak/Fading/Recovery)"
+    )
+    event_direction_reasoning: Optional[str] = Field(
+        default=None,
+        description="Phase 3a: Explanation of event direction analysis"
+    )
+
 
 def _format_news(articles: List[dict]) -> str:
     if not articles:
@@ -133,12 +148,14 @@ def format_qc_quantitative_context(qc_data: Optional[Dict[str, Any]]) -> str:
 def format_macro_context(macro_parsed: dict) -> str:
     """
     Convert Step 1 macro JSON into a richly structured text block for Step 2.
- 
+
     Goal: ensure every war/oil/crisis keyword survives into Step 2's context
     window intact, so Macro Transmission Rules fire correctly.
- 
+
     Output format is designed so _extract_key_events_from_context() in
     step2_micro.py can parse the numbered event lines for the validator.
+
+    Phase 3a: Includes event direction analysis and regime phase.
     """
     regime     = macro_parsed.get("regime", "Neutral")
     confidence = macro_parsed.get("confidence", 50)
@@ -149,38 +166,66 @@ def format_macro_context(macro_parsed: dict) -> str:
         or []
     )
     reasoning  = macro_parsed.get("reasoning", "No reasoning provided.")
- 
+
+    # Phase 3a fields
+    net_escalation = macro_parsed.get("net_escalation_score")
+    regime_phase = macro_parsed.get("regime_phase")
+    direction_reasoning = macro_parsed.get("event_direction_reasoning")
+
     # Severity label anchors Step 2's rule application strength
     try:
         conf_int = int(confidence)
     except (TypeError, ValueError):
         conf_int = 50
- 
+
     if conf_int >= 80:
         severity = "HIGH -- strong conviction, apply macro rules strictly"
     elif conf_int >= 60:
         severity = "MEDIUM -- apply macro rules, allow +/-1 micro adjustment"
     else:
         severity = "LOW -- macro rules are advisory, micro news may dominate"
- 
+
     # Numbered list so step2_micro._extract_key_events_from_context() can parse
     events_str = (
         "\n".join(f"  [{i+1}] {e}" for i, e in enumerate(events))
         if events else "  - None detected"
     )
- 
+
+    # Phase 3a: Format event direction analysis
+    phase3a_context = ""
+    if net_escalation is not None and regime_phase:
+        escalation_label = (
+            "STRONG ESCALATION" if net_escalation > 0.6 else
+            "MODERATE ESCALATION" if net_escalation > 0.3 else
+            "BALANCED / MIXED" if net_escalation > -0.3 else
+            "DE-ESCALATION"
+        )
+        phase3a_context = f"""
+
+                === PHASE 3a: EVENT DIRECTION ANALYSIS ===
+                REGIME PHASE        : {regime_phase}
+                NET ESCALATION SCORE: {net_escalation:.2f} ({escalation_label})
+                ANALYSIS            : {direction_reasoning}
+
+                TACTICAL IMPLICATION:
+                - If "Peak" → Maintain current positioning but prepare for pivot signals
+                - If "Building" → Strengthen directional positioning
+                - If "Fading" → Begin reducing extreme positions
+                - If "Recovery" → Consider early transition positioning
+                ==========================================="""
+
     context = f"""=== GLOBAL MACRO ENVIRONMENT ===
                 MACRO REGIME  : {regime}
                 CONFIDENCE    : {conf_int}/100  ({severity})
                 SUMMARY       : {summary}
-                
+
                 KEY EVENTS (USE THESE TO TRIGGER TRANSMISSION RULES):
                 {events_str}
-                
+
                 MACRO REASONING:
-                {reasoning}
+                {reasoning}{phase3a_context}
                 ================================="""
- 
+
     return context
 
 
@@ -246,5 +291,44 @@ async def run_macro_analysis(
         reasoning=result.reasoning
     )
     result.transmission_vector = transmission if transmission else None
+
+    # Phase 3a: Event direction analysis and signal contradiction handling
+    from app.pipeline.event_direction import analyze_event_directions
+
+    # Get previous day's net escalation score for trend detection
+    previous_net_escalation = None
+    if db:
+        from app.db.models import DailyDecision
+        from datetime import timedelta
+
+        previous_date = target_date - timedelta(days=1)
+        previous_decision = db.query(DailyDecision).filter_by(date=previous_date).first()
+
+        if previous_decision and previous_decision.step1_macro_result:
+            import json
+            try:
+                prev_data = json.loads(previous_decision.step1_macro_result)
+                previous_net_escalation = prev_data.get("net_escalation_score")
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    # Analyze event directions
+    direction_analysis = analyze_event_directions(
+        key_events=result.key_events,
+        regime=result.regime,
+        confidence=result.confidence,
+        previous_net_escalation=previous_net_escalation,
+    )
+
+    # Update Step1Output with Phase 3a results
+    result.net_escalation_score = direction_analysis.net_escalation_score
+    result.regime_phase = direction_analysis.regime_phase
+    result.event_direction_reasoning = direction_analysis.reasoning
+
+    # Apply confidence adjustment from signal contradictions
+    if direction_analysis.confidence_adjustment != 0:
+        original_confidence = result.confidence
+        result.confidence = max(0, min(100, result.confidence + direction_analysis.confidence_adjustment))
+        print(f"[Phase 3a] Confidence adjusted: {original_confidence} → {result.confidence} ({direction_analysis.confidence_adjustment:+d})")
 
     return result

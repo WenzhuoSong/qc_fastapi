@@ -60,6 +60,21 @@ async def get_allocation(
         log = db.query(DecisionLog).filter_by(date=today).first()
         digest = db.query(DailyNewsDigest).filter_by(date=today).first()
         transmission = db.query(EventTransmission).filter_by(date=today).first()
+
+        # Phase 3a: Extract event direction analysis from step1_macro_result
+        import json
+        net_escalation = None
+        regime_phase = None
+        event_direction_reasoning = None
+        if today_row.step1_macro_result:
+            try:
+                step1_data = json.loads(today_row.step1_macro_result)
+                net_escalation = step1_data.get("net_escalation_score")
+                regime_phase = step1_data.get("regime_phase")
+                event_direction_reasoning = step1_data.get("event_direction_reasoning")
+            except json.JSONDecodeError:
+                pass
+
         return AllocationResponse(
             date=str(today_row.date),
             status=today_row.status,
@@ -71,6 +86,9 @@ async def get_allocation(
             confidence=log.confidence if log else None,
             regime_override=log.regime_override if log else None,
             transmission_vector=transmission.transmission_vector if transmission else None,
+            net_escalation_score=net_escalation,
+            regime_phase=regime_phase,
+            event_direction_reasoning=event_direction_reasoning,
         )
 
     latest_row = (
@@ -84,6 +102,21 @@ async def get_allocation(
         log = db.query(DecisionLog).filter_by(date=latest_row.date).first()
         digest = db.query(DailyNewsDigest).filter_by(date=latest_row.date).first()
         transmission = db.query(EventTransmission).filter_by(date=latest_row.date).first()
+
+        # Phase 3a: Extract event direction analysis
+        import json
+        net_escalation = None
+        regime_phase = None
+        event_direction_reasoning = None
+        if latest_row.step1_macro_result:
+            try:
+                step1_data = json.loads(latest_row.step1_macro_result)
+                net_escalation = step1_data.get("net_escalation_score")
+                regime_phase = step1_data.get("regime_phase")
+                event_direction_reasoning = step1_data.get("event_direction_reasoning")
+            except json.JSONDecodeError:
+                pass
+
         return AllocationResponse(
             date=str(latest_row.date),
             status=latest_row.status,
@@ -95,6 +128,9 @@ async def get_allocation(
             confidence=log.confidence if log else None,
             regime_override=log.regime_override if log else None,
             transmission_vector=transmission.transmission_vector if transmission else None,
+            net_escalation_score=net_escalation,
+            regime_phase=regime_phase,
+            event_direction_reasoning=event_direction_reasoning,
             message=f"No READY data for {today}, using {latest_row.date}",
         )
 

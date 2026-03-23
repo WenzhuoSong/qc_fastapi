@@ -285,6 +285,13 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
             print(f"[{target_date}]   Events: {step1_result.key_events}")
             print(f"[{target_date}]   Reasoning: {step1_result.reasoning[:200]}")
 
+            # Phase 3a: Print event direction analysis
+            if step1_result.net_escalation_score is not None:
+                print(f"[{target_date}]   [Phase 3a] Net Escalation: {step1_result.net_escalation_score:.2f}")
+                print(f"[{target_date}]   [Phase 3a] Regime Phase: {step1_result.regime_phase}")
+                if step1_result.event_direction_reasoning:
+                    print(f"[{target_date}]   [Phase 3a] {step1_result.event_direction_reasoning}")
+
         # ── Restore macro_parsed on checkpoint resume ──
         if not macro_parsed and row.step1_macro_result:
             try:
