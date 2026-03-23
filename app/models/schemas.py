@@ -6,7 +6,7 @@ reuse, and keep consistent across endpoints.
 """
 
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
 
 # ── Allocation (V3.1 Chronos) ───────────────────────────────────────
@@ -32,6 +32,13 @@ class AllocationResponse(BaseModel):
     duration_category: Optional[str] = None
     exit_strategy: Optional[str] = None
     tactical_implications: Optional[List[str]] = None
+    # Phase 3c: Regime transition detection
+    transition_probability: Optional[float] = None
+    transition_direction: Optional[str] = None
+    pivot_signals: Optional[List[Dict[str, str]]] = None
+    confidence_trend: Optional[str] = None
+    early_warning: Optional[bool] = None
+    transition_recommendation: Optional[str] = None
     message: Optional[str] = None
 
 

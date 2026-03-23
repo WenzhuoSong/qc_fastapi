@@ -61,6 +61,33 @@ class Step1Output(BaseModel):
         description="Phase 3b: Actionable tactical recommendations"
     )
 
+    # Phase 3c: Regime transition detection
+    transition_probability: Optional[float] = Field(
+        default=None,
+        ge=0.0, le=1.0,
+        description="Phase 3c: Probability of regime transition (0.0-1.0)"
+    )
+    transition_direction: Optional[str] = Field(
+        default=None,
+        description="Phase 3c: Expected transition direction (e.g., 'Risk-Off Peak → Fading')"
+    )
+    pivot_signals: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="Phase 3c: Pivot signals to monitor for transition"
+    )
+    confidence_trend: Optional[str] = Field(
+        default=None,
+        description="Phase 3c: Confidence trajectory (rising/falling/stable/volatile)"
+    )
+    early_warning: Optional[bool] = Field(
+        default=None,
+        description="Phase 3c: True if transition appears imminent"
+    )
+    transition_recommendation: Optional[str] = Field(
+        default=None,
+        description="Phase 3c: Tactical recommendation for position management"
+    )
+
 
 def _format_news(articles: List[dict]) -> str:
     if not articles:
@@ -196,6 +223,13 @@ def format_macro_context(macro_parsed: dict) -> str:
     exit_strategy = macro_parsed.get("exit_strategy")
     tactical_implications = macro_parsed.get("tactical_implications")
 
+    # Phase 3c fields
+    transition_probability = macro_parsed.get("transition_probability")
+    transition_direction = macro_parsed.get("transition_direction")
+    pivot_signals = macro_parsed.get("pivot_signals")
+    early_warning = macro_parsed.get("early_warning")
+    transition_recommendation = macro_parsed.get("transition_recommendation")
+
     # Severity label anchors Step 2's rule application strength
     try:
         conf_int = int(confidence)
@@ -254,6 +288,31 @@ def format_macro_context(macro_parsed: dict) -> str:
                 {chr(10).join(f'  - {impl}' for impl in (tactical_implications or []))}
                 ==========================================="""
 
+    # Phase 3c: Format regime transition analysis
+    phase3c_context = ""
+    if transition_probability is not None:
+        warning_flag = "⚠️ " if early_warning else ""
+        prob_pct = int(transition_probability * 100)
+
+        # Format pivot signals
+        pivot_str = ""
+        if pivot_signals:
+            met_count = sum(1 for s in pivot_signals if s.get("status") == "met")
+            pivot_str = f"\n                PIVOT SIGNALS: {met_count}/{len(pivot_signals)} met\n"
+            for sig in pivot_signals[:4]:  # Show first 4 signals
+                status_icon = "✓" if sig.get("status") == "met" else "○"
+                pivot_str += f"                  {status_icon} {sig.get('signal', 'Unknown')}\n"
+
+        phase3c_context = f"""
+
+                === PHASE 3c: REGIME TRANSITION ANALYSIS ===
+                {warning_flag}TRANSITION PROBABILITY: {prob_pct}%
+                EXPECTED DIRECTION     : {transition_direction or 'No clear transition'}
+                {pivot_str}
+                RECOMMENDATION:
+                {transition_recommendation}
+                ==========================================="""
+
     context = f"""=== GLOBAL MACRO ENVIRONMENT ===
                 MACRO REGIME  : {regime}
                 CONFIDENCE    : {conf_int}/100  ({severity})
@@ -263,7 +322,7 @@ def format_macro_context(macro_parsed: dict) -> str:
                 {events_str}
 
                 MACRO REASONING:
-                {reasoning}{phase3a_context}{phase3b_context}
+                {reasoning}{phase3a_context}{phase3b_context}{phase3c_context}
                 ================================="""
 
     return context
@@ -388,5 +447,46 @@ async def run_macro_analysis(
 
     print(f"[Phase 3b] Duration: {duration_analysis.primary_duration} ({duration_analysis.category})")
     print(f"[Phase 3b] Exit Strategy: {duration_analysis.exit_strategy[:100]}...")
+
+    # Phase 3c: Regime transition detection
+    from app.pipeline.regime_transition import (
+        detect_regime_transition,
+        get_confidence_history,
+    )
+
+    # Get confidence history (last 5 days)
+    confidence_history = []
+    if db:
+        confidence_history = get_confidence_history(db, target_date, days=5)
+        # Add current confidence
+        confidence_history.append(result.confidence)
+
+    # Detect regime transition
+    transition_analysis = detect_regime_transition(
+        regime=result.regime,
+        regime_phase=result.regime_phase or "Unknown",
+        net_escalation=result.net_escalation_score or 0.0,
+        previous_net_escalation=previous_net_escalation,
+        confidence=result.confidence,
+        confidence_history=confidence_history,
+        key_events=result.key_events,
+    )
+
+    # Update Step1Output with Phase 3c results
+    result.transition_probability = transition_analysis.transition_probability
+    result.transition_direction = transition_analysis.direction
+    # Convert PivotSignal objects to dicts
+    result.pivot_signals = [s.model_dump() for s in transition_analysis.pivot_signals]
+    result.confidence_trend = transition_analysis.confidence_trend
+    result.early_warning = transition_analysis.early_warning
+    result.transition_recommendation = transition_analysis.recommendation
+
+    print(f"[Phase 3c] Transition Probability: {transition_analysis.transition_probability:.0%}")
+    if transition_analysis.direction:
+        print(f"[Phase 3c] Direction: {transition_analysis.direction}")
+    print(f"[Phase 3c] Confidence Trend: {transition_analysis.confidence_trend}")
+    print(f"[Phase 3c] Early Warning: {transition_analysis.early_warning}")
+    print(f"[Phase 3c] Pivot Signals: {len(transition_analysis.pivot_signals)} signals, "
+          f"{sum(1 for s in transition_analysis.pivot_signals if s.status == 'met')} met")
 
     return result

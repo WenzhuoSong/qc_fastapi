@@ -299,6 +299,17 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                 if step1_result.exit_strategy:
                     print(f"[{target_date}]   [Phase 3b] Exit Strategy: {step1_result.exit_strategy[:120]}...")
 
+            # Phase 3c: Print regime transition analysis
+            if step1_result.transition_probability is not None:
+                warning_flag = "⚠️ " if step1_result.early_warning else ""
+                print(f"[{target_date}]   [Phase 3c] {warning_flag}Transition Probability: {step1_result.transition_probability:.0%}")
+                if step1_result.transition_direction:
+                    print(f"[{target_date}]   [Phase 3c] Direction: {step1_result.transition_direction}")
+                print(f"[{target_date}]   [Phase 3c] Confidence Trend: {step1_result.confidence_trend}")
+                if step1_result.pivot_signals:
+                    met_count = sum(1 for s in step1_result.pivot_signals if s.get("status") == "met")
+                    print(f"[{target_date}]   [Phase 3c] Pivot Signals: {met_count}/{len(step1_result.pivot_signals)} met")
+
         # ── Restore macro_parsed on checkpoint resume ──
         if not macro_parsed and row.step1_macro_result:
             try:

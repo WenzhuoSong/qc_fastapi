@@ -61,7 +61,7 @@ async def get_allocation(
         digest = db.query(DailyNewsDigest).filter_by(date=today).first()
         transmission = db.query(EventTransmission).filter_by(date=today).first()
 
-        # Phase 3a & 3b: Extract event direction and duration analysis from step1_macro_result
+        # Phase 3a/3b/3c: Extract analysis from step1_macro_result
         import json
         net_escalation = None
         regime_phase = None
@@ -70,6 +70,12 @@ async def get_allocation(
         duration_category = None
         exit_strategy = None
         tactical_implications = None
+        transition_probability = None
+        transition_direction = None
+        pivot_signals = None
+        confidence_trend = None
+        early_warning = None
+        transition_recommendation = None
         if today_row.step1_macro_result:
             try:
                 step1_data = json.loads(today_row.step1_macro_result)
@@ -82,6 +88,13 @@ async def get_allocation(
                 duration_category = step1_data.get("duration_category")
                 exit_strategy = step1_data.get("exit_strategy")
                 tactical_implications = step1_data.get("tactical_implications")
+                # Phase 3c
+                transition_probability = step1_data.get("transition_probability")
+                transition_direction = step1_data.get("transition_direction")
+                pivot_signals = step1_data.get("pivot_signals")
+                confidence_trend = step1_data.get("confidence_trend")
+                early_warning = step1_data.get("early_warning")
+                transition_recommendation = step1_data.get("transition_recommendation")
             except json.JSONDecodeError:
                 pass
 
@@ -103,6 +116,12 @@ async def get_allocation(
             duration_category=duration_category,
             exit_strategy=exit_strategy,
             tactical_implications=tactical_implications,
+            transition_probability=transition_probability,
+            transition_direction=transition_direction,
+            pivot_signals=pivot_signals,
+            confidence_trend=confidence_trend,
+            early_warning=early_warning,
+            transition_recommendation=transition_recommendation,
         )
 
     latest_row = (
@@ -117,7 +136,7 @@ async def get_allocation(
         digest = db.query(DailyNewsDigest).filter_by(date=latest_row.date).first()
         transmission = db.query(EventTransmission).filter_by(date=latest_row.date).first()
 
-        # Phase 3a & 3b: Extract event direction and duration analysis
+        # Phase 3a/3b/3c: Extract analysis
         import json
         net_escalation = None
         regime_phase = None
@@ -126,6 +145,12 @@ async def get_allocation(
         duration_category = None
         exit_strategy = None
         tactical_implications = None
+        transition_probability = None
+        transition_direction = None
+        pivot_signals = None
+        confidence_trend = None
+        early_warning = None
+        transition_recommendation = None
         if latest_row.step1_macro_result:
             try:
                 step1_data = json.loads(latest_row.step1_macro_result)
@@ -138,6 +163,13 @@ async def get_allocation(
                 duration_category = step1_data.get("duration_category")
                 exit_strategy = step1_data.get("exit_strategy")
                 tactical_implications = step1_data.get("tactical_implications")
+                # Phase 3c
+                transition_probability = step1_data.get("transition_probability")
+                transition_direction = step1_data.get("transition_direction")
+                pivot_signals = step1_data.get("pivot_signals")
+                confidence_trend = step1_data.get("confidence_trend")
+                early_warning = step1_data.get("early_warning")
+                transition_recommendation = step1_data.get("transition_recommendation")
             except json.JSONDecodeError:
                 pass
 
@@ -159,6 +191,12 @@ async def get_allocation(
             duration_category=duration_category,
             exit_strategy=exit_strategy,
             tactical_implications=tactical_implications,
+            transition_probability=transition_probability,
+            transition_direction=transition_direction,
+            pivot_signals=pivot_signals,
+            confidence_trend=confidence_trend,
+            early_warning=early_warning,
+            transition_recommendation=transition_recommendation,
             message=f"No READY data for {today}, using {latest_row.date}",
         )
 
