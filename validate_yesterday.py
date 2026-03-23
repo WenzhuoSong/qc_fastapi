@@ -27,6 +27,7 @@ import sys
 from datetime import date, timedelta, datetime
 from typing import Optional
 
+import pandas as pd
 import yfinance as yf
 from sqlalchemy.orm import Session
 
@@ -62,18 +63,17 @@ def get_spy_return(prediction_date: date) -> Optional[float]:
             return None
 
         # Handle different yfinance data structures
-        # Single ticker can return either 'Close' or ('Close', 'SPY') column
-        if 'Close' in spy.columns:
-            close_col = spy['Close']
-        elif ('Close', 'SPY') in spy.columns:
-            close_col = spy[('Close', 'SPY')]
+        # yfinance can return multi-level columns for single ticker
+        if isinstance(spy.columns, pd.MultiIndex):
+            # Multi-level columns: (('Close', 'SPY'), ('Open', 'SPY'), ...)
+            close_col = spy['Close']['SPY']
         else:
-            print(f"⚠️  Unexpected SPY data structure: {spy.columns}")
-            return None
+            # Single-level columns: ('Close', 'Open', ...)
+            close_col = spy['Close']
 
-        # Get closing prices
-        close_t = float(close_col.iloc[0])
-        close_t1 = float(close_col.iloc[1])
+        # Extract scalar values using .values[i] to avoid Series
+        close_t = float(close_col.values[0])
+        close_t1 = float(close_col.values[1])
 
         return_1d = (close_t1 - close_t) / close_t
 
