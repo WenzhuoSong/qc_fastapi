@@ -43,6 +43,24 @@ class Step1Output(BaseModel):
         description="Phase 3a: Explanation of event direction analysis"
     )
 
+    # Phase 3b: Duration estimation
+    duration_estimate: Optional[str] = Field(
+        default=None,
+        description="Phase 3b: Expected duration (e.g., '1-2 weeks', '1-2 months', 'indefinite')"
+    )
+    duration_category: Optional[str] = Field(
+        default=None,
+        description="Phase 3b: Duration category (short_term/medium_term/long_term)"
+    )
+    exit_strategy: Optional[str] = Field(
+        default=None,
+        description="Phase 3b: Tactical exit strategy based on duration"
+    )
+    tactical_implications: Optional[List[str]] = Field(
+        default=None,
+        description="Phase 3b: Actionable tactical recommendations"
+    )
+
 
 def _format_news(articles: List[dict]) -> str:
     if not articles:
@@ -172,6 +190,12 @@ def format_macro_context(macro_parsed: dict) -> str:
     regime_phase = macro_parsed.get("regime_phase")
     direction_reasoning = macro_parsed.get("event_direction_reasoning")
 
+    # Phase 3b fields
+    duration_estimate = macro_parsed.get("duration_estimate")
+    duration_category = macro_parsed.get("duration_category")
+    exit_strategy = macro_parsed.get("exit_strategy")
+    tactical_implications = macro_parsed.get("tactical_implications")
+
     # Severity label anchors Step 2's rule application strength
     try:
         conf_int = int(confidence)
@@ -214,6 +238,22 @@ def format_macro_context(macro_parsed: dict) -> str:
                 - If "Recovery" → Consider early transition positioning
                 ==========================================="""
 
+    # Phase 3b: Format duration estimate
+    phase3b_context = ""
+    if duration_estimate and exit_strategy:
+        phase3b_context = f"""
+
+                === PHASE 3b: DURATION ESTIMATE & EXIT STRATEGY ===
+                EXPECTED DURATION: {duration_estimate}
+                CATEGORY         : {duration_category}
+
+                EXIT STRATEGY:
+                {exit_strategy}
+
+                TACTICAL IMPLICATIONS:
+                {chr(10).join(f'  - {impl}' for impl in (tactical_implications or []))}
+                ==========================================="""
+
     context = f"""=== GLOBAL MACRO ENVIRONMENT ===
                 MACRO REGIME  : {regime}
                 CONFIDENCE    : {conf_int}/100  ({severity})
@@ -223,7 +263,7 @@ def format_macro_context(macro_parsed: dict) -> str:
                 {events_str}
 
                 MACRO REASONING:
-                {reasoning}{phase3a_context}
+                {reasoning}{phase3a_context}{phase3b_context}
                 ================================="""
 
     return context
@@ -330,5 +370,23 @@ async def run_macro_analysis(
         original_confidence = result.confidence
         result.confidence = max(0, min(100, result.confidence + direction_analysis.confidence_adjustment))
         print(f"[Phase 3a] Confidence adjusted: {original_confidence} → {result.confidence} ({direction_analysis.confidence_adjustment:+d})")
+
+    # Phase 3b: Duration estimation and exit strategy
+    from app.pipeline.duration_estimation import aggregate_duration_signals
+
+    duration_analysis = aggregate_duration_signals(
+        key_events=result.key_events,
+        reasoning=result.reasoning,
+        regime=result.regime,
+    )
+
+    # Update Step1Output with Phase 3b results
+    result.duration_estimate = duration_analysis.primary_duration
+    result.duration_category = duration_analysis.category
+    result.exit_strategy = duration_analysis.exit_strategy
+    result.tactical_implications = duration_analysis.tactical_implications
+
+    print(f"[Phase 3b] Duration: {duration_analysis.primary_duration} ({duration_analysis.category})")
+    print(f"[Phase 3b] Exit Strategy: {duration_analysis.exit_strategy[:100]}...")
 
     return result

@@ -292,6 +292,13 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
                 if step1_result.event_direction_reasoning:
                     print(f"[{target_date}]   [Phase 3a] {step1_result.event_direction_reasoning}")
 
+            # Phase 3b: Print duration estimate
+            if step1_result.duration_estimate:
+                print(f"[{target_date}]   [Phase 3b] Duration: {step1_result.duration_estimate}")
+                print(f"[{target_date}]   [Phase 3b] Category: {step1_result.duration_category}")
+                if step1_result.exit_strategy:
+                    print(f"[{target_date}]   [Phase 3b] Exit Strategy: {step1_result.exit_strategy[:120]}...")
+
         # ── Restore macro_parsed on checkpoint resume ──
         if not macro_parsed and row.step1_macro_result:
             try:

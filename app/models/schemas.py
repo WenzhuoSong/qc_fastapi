@@ -27,6 +27,11 @@ class AllocationResponse(BaseModel):
     net_escalation_score: Optional[float] = None
     regime_phase: Optional[str] = None
     event_direction_reasoning: Optional[str] = None
+    # Phase 3b: Duration estimation
+    duration_estimate: Optional[str] = None
+    duration_category: Optional[str] = None
+    exit_strategy: Optional[str] = None
+    tactical_implications: Optional[List[str]] = None
     message: Optional[str] = None
 
 
