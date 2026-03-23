@@ -8,6 +8,7 @@ ORM Models
 - TickerNewsLibrary:   Pre-fetched per-ticker news with LLM summaries and sentiment
 - SectorNewsLibrary:   Aggregated sector-level summaries from constituent ticker news
 - EventTransmission:   Phase 2 - Macro event → sector transmission vectors (causal modeling)
+- DailyAccuracy:       Phase 5a - Daily regime prediction accuracy validation (T+1 actual returns)
 """
 
 import datetime
@@ -237,3 +238,47 @@ class EventTransmission(Base):
 
     def __repr__(self) -> str:
         return f"<EventTransmission {self.date} {self.event_id} validated={self.validated}>"
+
+
+class DailyAccuracy(Base):
+    """Phase 5a: Daily regime prediction accuracy validation.
+
+    Validates AI regime predictions against actual next-day market behavior.
+    Runs T+1 (validates yesterday's prediction using today's market data).
+
+    Accuracy logic:
+        - Risk-Off prediction correct if SPY drops >0.5%
+        - Risk-On prediction correct if SPY rises >0.3%
+        - Neutral prediction correct if SPY in [-0.3%, +0.3%]
+
+    Key metrics:
+        - prediction_correct: Did regime match market direction?
+        - regime_match: Did AI agree with QC's quantitative regime?
+        - confidence_calibration: Track if high-confidence predictions are more accurate
+    """
+    __tablename__ = "daily_accuracy"
+
+    date = Column(Date, primary_key=True)  # Prediction date (not validation date)
+
+    # Predictions (from T day)
+    predicted_regime = Column(String(20), nullable=False)  # AI's regime call
+    qc_regime = Column(String(20), nullable=True)  # QC's quantitative regime
+    predicted_confidence = Column(Integer, nullable=True)  # 0-100
+    defense_level = Column(String(20), nullable=True)  # full/light/half
+
+    # Actual outcomes (from T+1 day)
+    spy_return_1d = Column(Float, nullable=True)  # Next-day SPY return
+    actual_market_direction = Column(String(20), nullable=True)  # Risk-On/Neutral/Risk-Off derived from return
+
+    # Validation results
+    prediction_correct = Column(Boolean, nullable=True)  # Did regime match market direction?
+    regime_match = Column(Boolean, nullable=True)  # Did AI agree with QC?
+
+    # Metadata
+    validated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DailyAccuracy {self.date} {self.predicted_regime} correct={self.prediction_correct}>"

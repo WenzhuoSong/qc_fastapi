@@ -4,7 +4,7 @@ API V1 路由聚合
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import allocation, holdings, decisions, health, transmission
+from app.api.v1.endpoints import allocation, holdings, decisions, health, transmission, accuracy
 
 api_router = APIRouter()
 
@@ -14,3 +14,4 @@ api_router.include_router(allocation.router, prefix="/allocation", tags=["alloca
 api_router.include_router(holdings.router, prefix="/holdings", tags=["holdings"])
 api_router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
 api_router.include_router(transmission.router, prefix="/transmission", tags=["transmission"])
+api_router.include_router(accuracy.router, prefix="/accuracy", tags=["accuracy"])
