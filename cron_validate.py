@@ -33,11 +33,21 @@ def main():
     print(f"Validation Date: {date.today()}")
     print()
 
+    # Import trading day checker
+    from validate_yesterday import is_trading_day
+
+    # Check if yesterday was a trading day
+    if not is_trading_day(yesterday):
+        weekday_name = yesterday.strftime("%A")
+        print(f"⏭️  {yesterday} ({weekday_name}) is not a trading day")
+        print(f"    Market closed - no validation needed")
+        sys.exit(0)
+
     # Check if yesterday has a prediction
     decision = db.query(DecisionLog).filter_by(date=yesterday).first()
     if not decision or not decision.ai_regime:
-        print(f"⏭️  No prediction for {yesterday} - nothing to validate")
-        print(f"    (This is normal if yesterday's pipeline failed or was skipped)")
+        print(f"⚠️  No prediction for {yesterday} - nothing to validate")
+        print(f"    (This is unexpected for a trading day - check pipeline logs)")
         sys.exit(0)
 
     # Check if already validated

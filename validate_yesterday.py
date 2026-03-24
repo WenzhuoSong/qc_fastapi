@@ -42,6 +42,40 @@ RISK_ON_THRESHOLD = 0.005     # > +0.5% = Risk-On
 # Between these = Neutral
 
 
+# US stock market holidays (major holidays only)
+US_MARKET_HOLIDAYS_2026 = [
+    date(2026, 1, 1),   # New Year's Day
+    date(2026, 1, 19),  # MLK Day
+    date(2026, 2, 16),  # Presidents Day
+    date(2026, 4, 3),   # Good Friday
+    date(2026, 5, 25),  # Memorial Day
+    date(2026, 7, 3),   # Independence Day (observed)
+    date(2026, 9, 7),   # Labor Day
+    date(2026, 11, 26), # Thanksgiving
+    date(2026, 12, 25), # Christmas
+]
+
+
+def is_trading_day(check_date: date) -> bool:
+    """Check if a date is a US stock market trading day.
+
+    Args:
+        check_date: Date to check
+
+    Returns:
+        True if trading day (Mon-Fri, not holiday), False otherwise
+    """
+    # Check weekend (Saturday=5, Sunday=6)
+    if check_date.weekday() >= 5:
+        return False
+
+    # Check holidays
+    if check_date in US_MARKET_HOLIDAYS_2026:
+        return False
+
+    return True
+
+
 def get_spy_return(prediction_date: date) -> Optional[float]:
     """Fetch next-day SPY return using yfinance.
 
@@ -117,6 +151,12 @@ def validate_prediction(
     Returns:
         True if validation succeeded, False otherwise
     """
+    # Check if trading day (skip weekends and holidays)
+    if not is_trading_day(prediction_date):
+        weekday_name = prediction_date.strftime("%A")
+        print(f"⏭️  {prediction_date} ({weekday_name}) is not a trading day - skipping")
+        return True  # Return True to not count as error
+
     # Check if already validated
     existing = db.query(DailyAccuracy).filter_by(date=prediction_date).first()
     if existing and not force:
@@ -127,6 +167,7 @@ def validate_prediction(
     decision = db.query(DecisionLog).filter_by(date=prediction_date).first()
     if not decision or not decision.ai_regime:
         print(f"⚠️  No AI regime prediction for {prediction_date}")
+        print(f"   (This is expected for non-trading days or pipeline failures)")
         return False
 
     print(f"\n{'='*70}")
@@ -211,6 +252,11 @@ def backfill_unvalidated(db: Session, force: bool = False):
     for decision in decisions:
         # Skip future dates (can't validate yet)
         if decision.date >= date.today():
+            skipped_count += 1
+            continue
+
+        # Skip non-trading days (weekends/holidays)
+        if not is_trading_day(decision.date):
             skipped_count += 1
             continue
 
