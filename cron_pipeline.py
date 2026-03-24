@@ -92,8 +92,10 @@ def _apply_regime_override(
 
     TIERED OVERRIDE LOGIC:
 
-    Tier A - Geopolitical Emergency: If AI detects Risk-Off with war/oil/crisis keywords,
-             override triggers at lower confidence (>= 60) to catch black swan events.
+    Tier A - Geopolitical Emergency: Uses geo_severity (independent of confidence)
+             computed from keyword count + event count. Triggers when geo_severity >= 0.5.
+             CRITICAL: Decoupled from confidence to prevent Phase 5b contradiction detection
+             from blocking legitimate geopolitical overrides.
 
     Tier B - Confidence-Based: Traditional high-confidence override (>= 80).
     """
@@ -125,7 +127,10 @@ def _apply_regime_override(
     if ai_norm != "riskoff":
         return qc_regime, False, f"AI not Risk-Off ({ai_regime}), keeping QC={qc_regime}"
 
-    # ── TIER A: Geopolitical Emergency Override (lower threshold) ──
+    # ── TIER A: Geopolitical Emergency Override ──
+    # Use geo_severity (independent metric) instead of confidence
+    # Phase 5b may reduce confidence when detecting contradictions,
+    # but geopolitical risks remain real and require defensive positioning
     GEOPOLITICAL_KEYWORDS = [
         "war", "invasion", "attack", "missile", "bombing", "military",
         "oil", "crude", "embargo", "sanctions", "supply disruption",
@@ -136,12 +141,21 @@ def _apply_regime_override(
     combined_text = (" ".join(str(e) for e in key_events) + " " + reasoning).lower()
     matches = [kw for kw in GEOPOLITICAL_KEYWORDS if kw in combined_text]
 
-    if matches and confidence >= 60 and len(key_events) >= 2:
-        reason = (
-            f"GEO OVERRIDE: {qc_regime}→{ai_regime} | "
-            f"keywords={matches[:3]}, conf={confidence}, events={len(key_events)}"
-        )
-        return ai_regime, True, reason
+    if matches and len(key_events) >= 2:
+        # Compute geo_severity independent of confidence
+        # Based on: keyword count + event count
+        keyword_score = min(len(matches) / 3.0, 1.0)  # 3+ keywords = max
+        event_score = min(len(key_events) / 5.0, 1.0)  # 5+ events = max
+        geo_severity = 0.6 * keyword_score + 0.4 * event_score
+
+        # Trigger override if geo_severity >= 0.5 (regardless of confidence)
+        if geo_severity >= 0.5:
+            reason = (
+                f"GEO OVERRIDE: {qc_regime}→{ai_regime} | "
+                f"geo_severity={geo_severity:.2f}, keywords={matches[:3]}, "
+                f"events={len(key_events)}, conf={confidence}"
+            )
+            return ai_regime, True, reason
 
     # ── TIER B: Traditional Confidence-Based Override ──
     if confidence >= 80 and len(key_events) >= 2:
@@ -151,9 +165,21 @@ def _apply_regime_override(
         )
         return ai_regime, True, reason
 
+    # Debug: show why override was blocked
+    debug_info = []
+    if matches:
+        keyword_score = min(len(matches) / 3.0, 1.0)
+        event_score = min(len(key_events) / 5.0, 1.0)
+        geo_severity = 0.6 * keyword_score + 0.4 * event_score
+        debug_info.append(f"geo_severity={geo_severity:.2f}<0.5")
+    else:
+        debug_info.append("no keywords")
+    if confidence < 80:
+        debug_info.append(f"conf={confidence}<80")
+
     return qc_regime, False, (
-        f"Override blocked: conf={confidence}, events={len(key_events)}, "
-        f"no geo keywords matched. Keeping QC={qc_regime}"
+        f"Override blocked: {', '.join(debug_info)}. "
+        f"Keeping QC={qc_regime}"
     )
 
 
