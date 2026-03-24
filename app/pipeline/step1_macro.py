@@ -528,9 +528,9 @@ async def run_macro_analysis(
     # Store complex types as JSON strings for OpenAI structured outputs compatibility
     import json
 
-    result.llm_contradiction_score = llm_analysis.contradiction_score.composite_score
+    result.llm_contradiction_score = llm_analysis.contradiction_composite
     result.llm_signal_contradictions = json.dumps([c.model_dump() for c in llm_analysis.signal_contradictions])
-    result.llm_transmission_vector = json.dumps(llm_analysis.transmission_vector_llm.sectors)
+    result.llm_transmission_vector = json.dumps(llm_analysis.transmission_vector_llm)
     result.llm_confidence_adjustment = llm_analysis.confidence_adjustment
     result.llm_reasoning = (
         f"Transmission: {llm_analysis.transmission_reasoning} | "
@@ -539,9 +539,9 @@ async def run_macro_analysis(
 
     print(f"[Phase 5b] LLM Parallel Analysis (GPT-4o):")
     print(f"  - Contradiction Score:")
-    print(f"    • Composite: {llm_analysis.contradiction_score.composite_score:.2f} (0.7*max + 0.3*avg)")
-    print(f"    • Max: {llm_analysis.contradiction_score.max_severity:.2f}")
-    print(f"    • Avg: {llm_analysis.contradiction_score.average_severity:.2f}")
+    print(f"    • Composite: {llm_analysis.contradiction_composite:.2f} (0.7*max + 0.3*avg)")
+    print(f"    • Max: {llm_analysis.contradiction_max:.2f}")
+    print(f"    • Avg: {llm_analysis.contradiction_avg:.2f}")
     print(f"  - Detected {len(llm_analysis.signal_contradictions)} signal contradictions")
     print(f"  - Confidence Adjustment: {llm_analysis.confidence_adjustment:+d}")
 
@@ -558,8 +558,8 @@ async def run_macro_analysis(
     # 3. Max single contradiction >= 0.75 (extreme conflict)
     apply_llm_adjustment = (
         result.confidence < 70 or
-        llm_analysis.contradiction_score.composite_score >= 0.6 or
-        llm_analysis.contradiction_score.max_severity >= 0.75
+        llm_analysis.contradiction_composite >= 0.6 or
+        llm_analysis.contradiction_max >= 0.75
     )
 
     if apply_llm_adjustment and abs(llm_analysis.confidence_adjustment) >= 10:

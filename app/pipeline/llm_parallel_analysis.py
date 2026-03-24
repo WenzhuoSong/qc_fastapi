@@ -46,47 +46,77 @@ class SignalContradiction(BaseModel):
     reasoning: str = Field(description="Explanation of why these events contradict")
 
 
-class ContradictionScore(BaseModel):
-    """Composite contradiction scoring to prevent dilution.
+# Removed ContradictionScore and LLMTransmissionVector as nested models
+# OpenAI Structured Outputs doesn't handle nested Pydantic models well
+# Flattened into LLMParallelAnalysis directly
 
-    Uses weighted combination: 70% max severity + 30% average severity.
-    This prevents high-severity contradictions from being diluted by
-    multiple low-severity noise events.
 
-    Example:
-        2 critical contradictions (0.8) + 5 noise (0.1)
-        average = 0.31 (fails threshold)
-        composite = 0.7*0.8 + 0.3*0.31 = 0.653 (passes threshold)
+class LLMParallelAnalysis(BaseModel):
+    """LLM-generated parallel analysis output using GPT-4o.
+
+    Flattened structure for OpenAI Structured Outputs compatibility.
+    Nested Pydantic models cause schema validation errors.
     """
-    average_severity: float = Field(
+
+    # Signal contradiction analysis
+    signal_contradictions: List[SignalContradiction] = Field(
+        default_factory=list,
+        description="Detected contradictions between events (e.g., de-escalation vs escalation)"
+    )
+
+    # Contradiction scores (flattened from nested ContradictionScore)
+    contradiction_avg: float = Field(
+        default=0.0,
         ge=0.0, le=1.0,
         description="Average of all contradiction severities"
     )
-    max_severity: float = Field(
+    contradiction_max: float = Field(
+        default=0.0,
         ge=0.0, le=1.0,
         description="Maximum single contradiction severity"
     )
-    composite_score: float = Field(
+    contradiction_composite: float = Field(
+        default=0.0,
         ge=0.0, le=1.0,
         description="Composite score: 0.7*max + 0.3*avg (prevents dilution)"
     )
 
-
-class LLMTransmissionVector(BaseModel):
-    """LLM-generated sector transmission vector with validation.
-
-    Enforces:
-    - Valid sector symbols only (XLK, XLF, etc.)
-    - Values in range [-1.0, 1.0]
-    - Minimum coverage (at least 7/11 sectors)
-    """
-    sectors: Dict[str, float] = Field(
-        description="Sector ETF impacts, range -1.0 to +1.0"
+    # Transmission vector (flattened from nested LLMTransmissionVector)
+    transmission_vector_llm: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Sector ETF transmission scores, values in [-1.0, 1.0]"
+    )
+    transmission_reasoning: str = Field(
+        default="",
+        description="Detailed explanation of why these sectors are affected and by how much"
     )
 
-    @field_validator("sectors")
+    # Confidence adjustment
+    confidence_adjustment: int = Field(
+        default=0,
+        ge=-50, le=20,
+        description="Suggested confidence adjustment (-50 to +20). Negative for high contradictions, positive for clear reinforcing signals"
+    )
+    confidence_reasoning: str = Field(
+        default="",
+        description="Explanation of why confidence should be adjusted (e.g., signal quality, information clarity, contradiction severity)"
+    )
+
+    # Hidden risks (required, not optional)
+    hidden_risks: List[str] = Field(
+        default_factory=list,
+        description="Risks not captured by keywords. Return empty list if none detected."
+    )
+
+    # Temporal analysis (debug only, not exposed in API)
+    event_timeline: Optional[str] = Field(
+        default=None,
+        description="Timeline of events (debug/logging only)"
+    )
+
+    @field_validator("transmission_vector_llm")
     @classmethod
-    def validate_sectors(cls, v: Dict[str, float]) -> Dict[str, float]:
+    def validate_llm_vector(cls, v: Dict[str, float]) -> Dict[str, float]:
         """Validate sector symbols and value ranges."""
         # 1. Check for invalid sector symbols
         invalid_keys = set(v.keys()) - VALID_SECTORS
@@ -106,63 +136,15 @@ class LLMTransmissionVector(BaseModel):
             else:
                 clamped[sector] = score
 
-        return clamped
-
-    @model_validator(mode="after")
-    def validate_coverage(self) -> "LLMTransmissionVector":
-        """Ensure minimum sector coverage."""
-        MIN_COVERAGE = 7  # At least 7/11 sectors
-
-        if len(self.sectors) < MIN_COVERAGE:
+        # 3. Coverage check (warning only, don't fail)
+        MIN_COVERAGE = 7
+        if len(clamped) < MIN_COVERAGE:
             print(
-                f"[LLM Vector] Insufficient coverage: {len(self.sectors)}/11 sectors. "
+                f"[LLM Vector] Insufficient coverage: {len(clamped)}/11 sectors. "
                 f"Expected at least {MIN_COVERAGE}. LLM output may be incomplete."
             )
-            # Don't fail, but log warning
 
-        return self
-
-
-class LLMParallelAnalysis(BaseModel):
-    """LLM-generated parallel analysis output using GPT-4o."""
-
-    # Signal contradiction analysis
-    signal_contradictions: List[SignalContradiction] = Field(
-        default=[],
-        description="Detected contradictions between events (e.g., de-escalation vs escalation)"
-    )
-    contradiction_score: ContradictionScore = Field(
-        description="Composite contradiction scoring (max + avg weighted)"
-    )
-
-    # Transmission vector (LLM-generated, validated)
-    transmission_vector_llm: LLMTransmissionVector = Field(
-        description="Validated sector transmission vector with value range and coverage checks"
-    )
-    transmission_reasoning: str = Field(
-        description="Detailed explanation of why these sectors are affected and by how much"
-    )
-
-    # Confidence adjustment
-    confidence_adjustment: int = Field(
-        ge=-50, le=20,
-        description="Suggested confidence adjustment (-50 to +20). Negative for high contradictions, positive for clear reinforcing signals"
-    )
-    confidence_reasoning: str = Field(
-        description="Explanation of why confidence should be adjusted (e.g., signal quality, information clarity, contradiction severity)"
-    )
-
-    # Hidden risks (required, not optional)
-    hidden_risks: List[str] = Field(
-        default_factory=list,
-        description="Risks not captured by keywords. Return empty list if none detected."
-    )
-
-    # Temporal analysis (debug only, not exposed in API)
-    event_timeline: Optional[str] = Field(
-        default=None,
-        description="Timeline of events (debug/logging only)"
-    )
+        return clamped
 
 
 LLM_PARALLEL_SYSTEM_PROMPT = """You are an elite financial market analyst specializing in macro event interpretation and systemic risk detection.
@@ -250,7 +232,7 @@ Provide valid JSON matching the LLMParallelAnalysis schema. Be precise, quantita
 
 def compute_contradiction_score(
     contradictions: List[SignalContradiction]
-) -> ContradictionScore:
+) -> tuple[float, float, float]:
     """Compute composite contradiction score to prevent dilution.
 
     Uses weighted combination: 70% max severity + 30% average severity.
@@ -260,14 +242,10 @@ def compute_contradiction_score(
         contradictions: List of detected contradictions
 
     Returns:
-        ContradictionScore with average, max, and composite scores
+        Tuple of (average_severity, max_severity, composite_score)
     """
     if not contradictions:
-        return ContradictionScore(
-            average_severity=0.0,
-            max_severity=0.0,
-            composite_score=0.0
-        )
+        return (0.0, 0.0, 0.0)
 
     severities = [c.severity for c in contradictions]
     avg = sum(severities) / len(severities)
@@ -277,11 +255,7 @@ def compute_contradiction_score(
     # Single high-severity contradiction won't be diluted by low-severity noise
     composite = 0.7 * max_s + 0.3 * avg
 
-    return ContradictionScore(
-        average_severity=avg,
-        max_severity=max_s,
-        composite_score=composite
-    )
+    return (avg, max_s, composite)
 
 
 async def run_llm_parallel_analysis(
@@ -307,12 +281,10 @@ async def run_llm_parallel_analysis(
         print("[Phase 5b] Mock mode: no real API key configured")
         return LLMParallelAnalysis(
             signal_contradictions=[],
-            contradiction_score=ContradictionScore(
-                average_severity=0.0,
-                max_severity=0.0,
-                composite_score=0.0
-            ),
-            transmission_vector_llm=LLMTransmissionVector(sectors={}),
+            contradiction_avg=0.0,
+            contradiction_max=0.0,
+            contradiction_composite=0.0,
+            transmission_vector_llm={},
             transmission_reasoning="Mock mode: no real API key configured",
             confidence_adjustment=0,
             confidence_reasoning="Mock mode: no adjustment needed",
@@ -380,9 +352,7 @@ Provide precise, quantitative analysis with clear reasoning.
 
         result = response.choices[0].message.parsed
 
-        # Compute composite contradiction score from LLM-detected contradictions
-        # (Note: LLM returns ContradictionScore directly via structured output)
-
+        # LLM returns flattened structure with contradiction scores already computed
         print(f"[Phase 5b] LLM Parallel Analysis (GPT-4o) completed")
         return result
 
@@ -391,12 +361,10 @@ Provide precise, quantitative analysis with clear reasoning.
         # Return neutral analysis on error
         return LLMParallelAnalysis(
             signal_contradictions=[],
-            contradiction_score=ContradictionScore(
-                average_severity=0.0,
-                max_severity=0.0,
-                composite_score=0.0
-            ),
-            transmission_vector_llm=LLMTransmissionVector(sectors={}),
+            contradiction_avg=0.0,
+            contradiction_max=0.0,
+            contradiction_composite=0.0,
+            transmission_vector_llm={},
             transmission_reasoning=f"Analysis failed: {str(e)}",
             confidence_adjustment=0,
             confidence_reasoning="Error occurred, no adjustment",
@@ -429,12 +397,12 @@ async def test_llm_analysis():
     print("\n=== LLM Parallel Analysis Test ===")
     print(f"Contradictions: {len(result.signal_contradictions)}")
     print(f"Contradiction Score:")
-    print(f"  - Average: {result.contradiction_score.average_severity:.2f}")
-    print(f"  - Max: {result.contradiction_score.max_severity:.2f}")
-    print(f"  - Composite: {result.contradiction_score.composite_score:.2f}")
+    print(f"  - Average: {result.contradiction_avg:.2f}")
+    print(f"  - Max: {result.contradiction_max:.2f}")
+    print(f"  - Composite: {result.contradiction_composite:.2f}")
     print(f"Confidence Adjustment: {result.confidence_adjustment:+d}")
     print(f"\nTransmission Vector (LLM):")
-    for sector, impact in sorted(result.transmission_vector_llm.sectors.items()):
+    for sector, impact in sorted(result.transmission_vector_llm.items()):
         print(f"  {sector}: {impact:+.2f}")
     print(f"\nReasoning: {result.transmission_reasoning}")
 
