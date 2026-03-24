@@ -95,6 +95,12 @@ async def get_allocation(
                 confidence_trend = step1_data.get("confidence_trend")
                 early_warning = step1_data.get("early_warning")
                 transition_recommendation = step1_data.get("transition_recommendation")
+                # Phase 5b
+                llm_contradiction_score = step1_data.get("llm_contradiction_score")
+                llm_signal_contradictions = step1_data.get("llm_signal_contradictions")
+                llm_transmission_vector = step1_data.get("llm_transmission_vector")
+                llm_confidence_adjustment = step1_data.get("llm_confidence_adjustment")
+                llm_reasoning = step1_data.get("llm_reasoning")
             except json.JSONDecodeError:
                 pass
 
@@ -122,6 +128,11 @@ async def get_allocation(
             confidence_trend=confidence_trend,
             early_warning=early_warning,
             transition_recommendation=transition_recommendation,
+            llm_contradiction_score=llm_contradiction_score,
+            llm_signal_contradictions=llm_signal_contradictions,
+            llm_transmission_vector=llm_transmission_vector,
+            llm_confidence_adjustment=llm_confidence_adjustment,
+            llm_reasoning=llm_reasoning,
         )
 
     latest_row = (
@@ -170,6 +181,12 @@ async def get_allocation(
                 confidence_trend = step1_data.get("confidence_trend")
                 early_warning = step1_data.get("early_warning")
                 transition_recommendation = step1_data.get("transition_recommendation")
+                # Phase 5b
+                llm_contradiction_score = step1_data.get("llm_contradiction_score")
+                llm_signal_contradictions = step1_data.get("llm_signal_contradictions")
+                llm_transmission_vector = step1_data.get("llm_transmission_vector")
+                llm_confidence_adjustment = step1_data.get("llm_confidence_adjustment")
+                llm_reasoning = step1_data.get("llm_reasoning")
             except json.JSONDecodeError:
                 pass
 

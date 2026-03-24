@@ -88,6 +88,30 @@ class Step1Output(BaseModel):
         description="Phase 3c: Tactical recommendation for position management"
     )
 
+    # Phase 5b: LLM parallel analysis
+    llm_contradiction_score: Optional[float] = Field(
+        default=None,
+        ge=0.0, le=1.0,
+        description="Phase 5b: LLM-detected signal contradiction score (0=coherent, 1=contradictory)"
+    )
+    llm_signal_contradictions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Phase 5b: List of contradictions detected by LLM"
+    )
+    llm_transmission_vector: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Phase 5b: LLM-generated transmission vector (alternative to rule-based)"
+    )
+    llm_confidence_adjustment: Optional[int] = Field(
+        default=None,
+        ge=-50, le=20,
+        description="Phase 5b: LLM-recommended confidence adjustment"
+    )
+    llm_reasoning: Optional[str] = Field(
+        default=None,
+        description="Phase 5b: LLM explanation for transmission vector and adjustments"
+    )
+
 
 def _format_news(articles: List[dict]) -> str:
     if not articles:
@@ -488,5 +512,50 @@ async def run_macro_analysis(
     print(f"[Phase 3c] Early Warning: {transition_analysis.early_warning}")
     print(f"[Phase 3c] Pivot Signals: {len(transition_analysis.pivot_signals)} signals, "
           f"{sum(1 for s in transition_analysis.pivot_signals if s.status == 'met')} met")
+
+    # Phase 5b: LLM parallel analysis using GPT-4o
+    from app.pipeline.llm_parallel_analysis import run_llm_parallel_analysis
+
+    llm_analysis = await run_llm_parallel_analysis(
+        key_events=result.key_events,
+        reasoning=result.reasoning,
+        regime=result.regime,
+        confidence=result.confidence,
+    )
+
+    # Update Step1Output with Phase 5b results
+    result.llm_contradiction_score = llm_analysis.overall_contradiction_score
+    result.llm_signal_contradictions = [c.model_dump() for c in llm_analysis.signal_contradictions]
+    result.llm_transmission_vector = llm_analysis.transmission_vector_llm
+    result.llm_confidence_adjustment = llm_analysis.confidence_adjustment
+    result.llm_reasoning = (
+        f"Transmission: {llm_analysis.transmission_reasoning} | "
+        f"Confidence: {llm_analysis.confidence_reasoning}"
+    )
+
+    print(f"[Phase 5b] LLM Parallel Analysis (GPT-4o):")
+    print(f"  - Contradiction Score: {llm_analysis.overall_contradiction_score:.2f}")
+    print(f"  - Detected {len(llm_analysis.signal_contradictions)} signal contradictions")
+    print(f"  - Confidence Adjustment: {llm_analysis.confidence_adjustment:+d}")
+
+    if llm_analysis.signal_contradictions:
+        print(f"  - Key Contradictions:")
+        for contradiction in llm_analysis.signal_contradictions[:2]:  # Show first 2
+            print(f"    • {contradiction.event_a} vs {contradiction.event_b}")
+            print(f"      ({contradiction.contradiction_type}, severity {contradiction.severity:.2f})")
+
+    # Apply LLM confidence adjustment if warranted
+    # Strategy: Use LLM adjustment when rule-based confidence is uncertain (< 70)
+    # or when LLM detects high contradictions (≥ 0.6)
+    apply_llm_adjustment = (
+        result.confidence < 70 or
+        llm_analysis.overall_contradiction_score >= 0.6
+    )
+
+    if apply_llm_adjustment and abs(llm_analysis.confidence_adjustment) >= 10:
+        original_confidence = result.confidence
+        result.confidence = max(0, min(100, result.confidence + llm_analysis.confidence_adjustment))
+        print(f"[Phase 5b] Applied LLM confidence adjustment: {original_confidence} → {result.confidence} ({llm_analysis.confidence_adjustment:+d})")
+        print(f"[Phase 5b] Reason: {llm_analysis.confidence_reasoning}")
 
     return result

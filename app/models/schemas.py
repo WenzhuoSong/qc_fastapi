@@ -39,6 +39,12 @@ class AllocationResponse(BaseModel):
     confidence_trend: Optional[str] = None
     early_warning: Optional[bool] = None
     transition_recommendation: Optional[str] = None
+    # Phase 5b: LLM parallel analysis
+    llm_contradiction_score: Optional[float] = None
+    llm_signal_contradictions: Optional[List[Dict[str, Any]]] = None
+    llm_transmission_vector: Optional[Dict[str, float]] = None
+    llm_confidence_adjustment: Optional[int] = None
+    llm_reasoning: Optional[str] = None
     message: Optional[str] = None
 
 
