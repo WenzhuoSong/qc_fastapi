@@ -204,6 +204,39 @@ def _compute_defense_level(effective_regime: str) -> str:
     return REGIME_TO_DEFENSE.get(r, "light")  # Default to light for unknown
 
 
+def _compute_ema3(current_value: float, db: Session, target_date: date) -> float:
+    """Compute 3-day EMA for contradiction score.
+
+    EMA formula: EMA_today = α * value_today + (1-α) * EMA_yesterday
+    where α = 2/(N+1) = 2/4 = 0.5 for N=3
+
+    Args:
+        current_value: Today's raw contradiction score
+        db: Database session
+        target_date: Current date
+
+    Returns:
+        3-day EMA smoothed score
+    """
+    from datetime import timedelta
+
+    ALPHA = 0.5  # EMA smoothing factor for N=3
+
+    # Query yesterday's EMA (if exists)
+    yesterday = target_date - timedelta(days=1)
+    prev_log = db.query(DecisionLog).filter_by(date=yesterday).first()
+
+    if prev_log and prev_log.contradiction_score_ema3 is not None:
+        # Use previous EMA
+        prev_ema = prev_log.contradiction_score_ema3
+        ema = ALPHA * current_value + (1 - ALPHA) * prev_ema
+    else:
+        # Bootstrap: use current value as EMA
+        ema = current_value
+
+    return ema
+
+
 # ═══════════════════════════════════════════════════════════════
 # Main pipeline
 # ═══════════════════════════════════════════════════════════════
@@ -484,6 +517,16 @@ async def run_pipeline(target_date: date, force: bool = False) -> None:
             log.confidence = macro_parsed.get("confidence", 50)
             log.defense_level = defense
             log.final_weights = weights
+
+            # ── Phase 5b: Store contradiction score with EMA smoothing ──
+            contradiction_raw = macro_parsed.get("llm_contradiction_score")
+            if contradiction_raw is not None:
+                log.contradiction_score_raw = float(contradiction_raw)
+                log.contradiction_score_ema3 = _compute_ema3(
+                    float(contradiction_raw), db, target_date
+                )
+            log.llm_confidence_adjustment = macro_parsed.get("llm_confidence_adjustment")
+
             log.reasoning = (
                 f"{macro_parsed.get('reasoning', '')}\n"
                 f"Override: {override_reason}"

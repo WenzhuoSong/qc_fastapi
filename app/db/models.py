@@ -95,6 +95,11 @@ class DecisionLog(Base):
 
     Post-hoc fields (market_outcome, decision_correct) are left NULL
     and can be filled later for accuracy analysis.
+
+    Phase 5b fields (2026-03-24):
+    - contradiction_score_raw: Raw LLM contradiction score (current day)
+    - contradiction_score_ema3: 3-day EMA smoothed score (reduces random noise)
+    - llm_confidence_adjustment: LLM suggested adjustment (-50 to +20)
     """
     __tablename__ = "decision_log"
 
@@ -106,6 +111,11 @@ class DecisionLog(Base):
     defense_level = Column(String(20), nullable=True)
     final_weights = Column(JSONB, nullable=True)
     reasoning = Column(Text, nullable=True)
+
+    # Phase 5b: LLM parallel analysis metrics
+    contradiction_score_raw = Column(Float, nullable=True)
+    contradiction_score_ema3 = Column(Float, nullable=True)
+    llm_confidence_adjustment = Column(Integer, nullable=True)
 
     market_outcome = Column(Text, nullable=True)
     decision_correct = Column(Boolean, nullable=True)

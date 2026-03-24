@@ -552,13 +552,34 @@ async def run_macro_analysis(
             print(f"      ({contradiction.contradiction_type}, severity {contradiction.severity:.2f})")
 
     # Apply LLM confidence adjustment with enhanced triggering logic
+    # Use EMA-smoothed score if DB available (reduces random noise from single-day LLM variance)
     # Trigger conditions:
     # 1. Base confidence < 70 (uncertain)
-    # 2. Composite contradiction score >= 0.6 (high conflicts)
+    # 2. Composite contradiction score >= 0.6 (high conflicts, uses EMA if available)
     # 3. Max single contradiction >= 0.75 (extreme conflict)
+
+    # Compute EMA for current contradiction score if db available
+    contradiction_score_for_trigger = llm_analysis.contradiction_composite
+    if db is not None:
+        from datetime import timedelta
+        from app.db.models import DecisionLog
+
+        ALPHA = 0.5  # EMA smoothing factor for N=3
+        yesterday = target_date - timedelta(days=1)
+        prev_log = db.query(DecisionLog).filter_by(date=yesterday).first()
+
+        if prev_log and prev_log.contradiction_score_ema3 is not None:
+            # Use EMA: α * current + (1-α) * prev_ema
+            contradiction_score_for_trigger = (
+                ALPHA * llm_analysis.contradiction_composite +
+                (1 - ALPHA) * prev_log.contradiction_score_ema3
+            )
+            print(f"[Phase 5b] Contradiction EMA: raw={llm_analysis.contradiction_composite:.2f}, "
+                  f"ema3={contradiction_score_for_trigger:.2f}")
+
     apply_llm_adjustment = (
         result.confidence < 70 or
-        llm_analysis.contradiction_composite >= 0.6 or
+        contradiction_score_for_trigger >= 0.6 or
         llm_analysis.contradiction_max >= 0.75
     )
 
