@@ -88,19 +88,19 @@ class Step1Output(BaseModel):
         description="Phase 3c: Tactical recommendation for position management"
     )
 
-    # Phase 5b: LLM parallel analysis
+    # Phase 5b: LLM parallel analysis (stored as JSON strings for OpenAI compatibility)
     llm_contradiction_score: Optional[float] = Field(
         default=None,
         ge=0.0, le=1.0,
         description="Phase 5b: LLM-detected signal contradiction score (0=coherent, 1=contradictory)"
     )
-    llm_signal_contradictions: Optional[List[Dict[str, Any]]] = Field(
+    llm_signal_contradictions: Optional[str] = Field(
         default=None,
-        description="Phase 5b: List of contradictions detected by LLM"
+        description="Phase 5b: JSON string of contradictions detected by LLM"
     )
-    llm_transmission_vector: Optional[Dict[str, float]] = Field(
+    llm_transmission_vector: Optional[str] = Field(
         default=None,
-        description="Phase 5b: LLM-generated transmission vector (alternative to rule-based)"
+        description="Phase 5b: JSON string of LLM-generated transmission vector"
     )
     llm_confidence_adjustment: Optional[int] = Field(
         default=None,
@@ -525,9 +525,12 @@ async def run_macro_analysis(
     )
 
     # Update Step1Output with Phase 5b results
+    # Store complex types as JSON strings for OpenAI structured outputs compatibility
+    import json
+
     result.llm_contradiction_score = llm_analysis.contradiction_score.composite_score
-    result.llm_signal_contradictions = [c.model_dump() for c in llm_analysis.signal_contradictions]
-    result.llm_transmission_vector = llm_analysis.transmission_vector_llm.sectors
+    result.llm_signal_contradictions = json.dumps([c.model_dump() for c in llm_analysis.signal_contradictions])
+    result.llm_transmission_vector = json.dumps(llm_analysis.transmission_vector_llm.sectors)
     result.llm_confidence_adjustment = llm_analysis.confidence_adjustment
     result.llm_reasoning = (
         f"Transmission: {llm_analysis.transmission_reasoning} | "
