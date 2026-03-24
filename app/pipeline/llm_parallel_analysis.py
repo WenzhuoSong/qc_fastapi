@@ -18,6 +18,7 @@ Cost: ~$0.005/day with GPT-4o (negligible)
 """
 
 import asyncio
+import json
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 from openai import AsyncOpenAI
@@ -174,7 +175,10 @@ Identify when events point in opposite directions:
 - 0.7-1.0: Severe contradiction (fundamentally incompatible signals, high uncertainty)
 
 ### 2. Transmission Vector Generation
-Predict sector ETF impacts on a scale of -1.0 (strong negative) to +1.0 (strong positive):
+Predict sector ETF impacts on a scale of -1.0 (strong negative) to +1.0 (strong positive).
+
+**IMPORTANT**: You must provide scores for ALL 11 sectors as individual fields (XLK, XLF, XLV, XLE, XLI, XLP, XLU, XLY, XLC, XLRE, XLB).
+Do not use nested objects or dictionaries. Each sector must be a top-level field in your response.
 
 **Sector ETFs**:
 - **XLE** (Energy): Oil price sensitivity, geopolitical risk premium
@@ -228,6 +232,72 @@ Provide valid JSON matching the LLMParallelAnalysis schema. Be precise, quantita
 3. Confidence adjustments must be justified by signal quality, not just contradiction
 4. Be intellectually honest: if analysis is uncertain, reflect that in outputs
 """
+
+
+# Manual JSON schema for OpenAI Structured Outputs
+# Pydantic v2 schema generation is incompatible with OpenAI's strict validation
+# Sector scores are flattened to top-level to avoid Dict[str, float] issues
+LLM_ANALYSIS_JSON_SCHEMA = {
+    "name": "LLMParallelAnalysis",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            # Signal contradictions
+            "signal_contradictions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "event_a": {"type": "string"},
+                        "event_b": {"type": "string"},
+                        "contradiction_type": {"type": "string"},
+                        "severity": {"type": "number"},
+                        "reasoning": {"type": "string"}
+                    },
+                    "required": ["event_a", "event_b", "contradiction_type", "severity", "reasoning"],
+                    "additionalProperties": False
+                }
+            },
+            # Contradiction scores
+            "contradiction_avg": {"type": "number"},
+            "contradiction_max": {"type": "number"},
+            "contradiction_composite": {"type": "number"},
+            # Sector transmission scores (flattened to avoid Dict issues)
+            "XLK": {"type": "number"},
+            "XLF": {"type": "number"},
+            "XLV": {"type": "number"},
+            "XLE": {"type": "number"},
+            "XLI": {"type": "number"},
+            "XLP": {"type": "number"},
+            "XLU": {"type": "number"},
+            "XLY": {"type": "number"},
+            "XLC": {"type": "number"},
+            "XLRE": {"type": "number"},
+            "XLB": {"type": "number"},
+            # Transmission reasoning
+            "transmission_reasoning": {"type": "string"},
+            # Confidence adjustment
+            "confidence_adjustment": {"type": "integer"},
+            "confidence_reasoning": {"type": "string"},
+            # Hidden risks
+            "hidden_risks": {
+                "type": "array",
+                "items": {"type": "string"}
+            }
+        },
+        "required": [
+            "signal_contradictions",
+            "contradiction_avg", "contradiction_max", "contradiction_composite",
+            "XLK", "XLF", "XLV", "XLE", "XLI",
+            "XLP", "XLU", "XLY", "XLC", "XLRE", "XLB",
+            "transmission_reasoning",
+            "confidence_adjustment", "confidence_reasoning",
+            "hidden_risks"
+        ],
+        "additionalProperties": False
+    }
+}
 
 
 def compute_contradiction_score(
@@ -320,7 +390,8 @@ YOUR ANALYSIS TASKS:
 
 2. **Transmission Vector Prediction**
    - Predict impact on all 11 sector ETFs (-1.0 to +1.0)
-   - Explain causal chain for each sector
+   - IMPORTANT: Provide each sector as a separate field (XLK, XLF, XLV, XLE, XLI, XLP, XLU, XLY, XLC, XLRE, XLB)
+   - Explain causal chain in transmission_reasoning field
    - Account for offsetting forces
 
 3. **Confidence Adjustment**
@@ -339,7 +410,9 @@ Provide precise, quantitative analysis with clear reasoning.
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
     try:
-        response = await client.beta.chat.completions.parse(
+        # Use manual JSON schema instead of Pydantic model
+        # to avoid schema validation errors with OpenAI Structured Outputs
+        response = await client.chat.completions.create(
             model="gpt-4o",  # Use GPT-4o for deep analysis (not mini)
             messages=[
                 {"role": "system", "content": LLM_PARALLEL_SYSTEM_PROMPT},
@@ -347,10 +420,49 @@ Provide precise, quantitative analysis with clear reasoning.
             ],
             temperature=0.0,
             max_tokens=1500,
-            response_format=LLMParallelAnalysis,
+            response_format={
+                "type": "json_schema",
+                "json_schema": LLM_ANALYSIS_JSON_SCHEMA
+            }
         )
 
-        result = response.choices[0].message.parsed
+        # Parse JSON response manually
+        raw = json.loads(response.choices[0].message.content)
+
+        # Reconstruct sector transmission vector with validation
+        sector_scores = {
+            sector: max(-1.0, min(1.0, raw[sector]))
+            for sector in ["XLK", "XLF", "XLV", "XLE", "XLI",
+                          "XLP", "XLU", "XLY", "XLC", "XLRE", "XLB"]
+        }
+
+        # Check coverage
+        MIN_COVERAGE = 7
+        non_zero_sectors = sum(1 for v in sector_scores.values() if abs(v) > 0.01)
+        if non_zero_sectors < MIN_COVERAGE:
+            print(
+                f"[LLM Vector] Insufficient coverage: {non_zero_sectors}/11 sectors. "
+                f"Expected at least {MIN_COVERAGE}. LLM output may be incomplete."
+            )
+
+        # Parse signal contradictions
+        contradictions = [
+            SignalContradiction(**c)
+            for c in raw["signal_contradictions"]
+        ]
+
+        # Build LLMParallelAnalysis object
+        result = LLMParallelAnalysis(
+            signal_contradictions=contradictions,
+            contradiction_avg=raw["contradiction_avg"],
+            contradiction_max=raw["contradiction_max"],
+            contradiction_composite=raw["contradiction_composite"],
+            transmission_vector_llm=sector_scores,
+            transmission_reasoning=raw["transmission_reasoning"],
+            confidence_adjustment=raw["confidence_adjustment"],
+            confidence_reasoning=raw["confidence_reasoning"],
+            hidden_risks=raw["hidden_risks"]
+        )
 
         # LLM returns flattened structure with contradiction scores already computed
         print(f"[Phase 5b] LLM Parallel Analysis (GPT-4o) completed")
