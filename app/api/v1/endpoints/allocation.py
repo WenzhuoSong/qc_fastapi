@@ -101,6 +101,17 @@ async def get_allocation(
                 llm_transmission_vector = step1_data.get("llm_transmission_vector")
                 llm_confidence_adjustment = step1_data.get("llm_confidence_adjustment")
                 llm_reasoning = step1_data.get("llm_reasoning")
+                # Deserialize if stored as JSON strings
+                if isinstance(llm_signal_contradictions, str):
+                    try:
+                        llm_signal_contradictions = json.loads(llm_signal_contradictions)
+                    except json.JSONDecodeError:
+                        llm_signal_contradictions = None
+                if isinstance(llm_transmission_vector, str):
+                    try:
+                        llm_transmission_vector = json.loads(llm_transmission_vector)
+                    except json.JSONDecodeError:
+                        llm_transmission_vector = None
             except json.JSONDecodeError:
                 pass
 
@@ -187,6 +198,17 @@ async def get_allocation(
                 llm_transmission_vector = step1_data.get("llm_transmission_vector")
                 llm_confidence_adjustment = step1_data.get("llm_confidence_adjustment")
                 llm_reasoning = step1_data.get("llm_reasoning")
+                # Deserialize if stored as JSON strings
+                if isinstance(llm_signal_contradictions, str):
+                    try:
+                        llm_signal_contradictions = json.loads(llm_signal_contradictions)
+                    except json.JSONDecodeError:
+                        llm_signal_contradictions = None
+                if isinstance(llm_transmission_vector, str):
+                    try:
+                        llm_transmission_vector = json.loads(llm_transmission_vector)
+                    except json.JSONDecodeError:
+                        llm_transmission_vector = None
             except json.JSONDecodeError:
                 pass
 
